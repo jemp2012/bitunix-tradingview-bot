@@ -16,8 +16,8 @@ app = Flask(__name__)
 BITUNIX_API_KEY = os.environ.get('BITUNIX_API_KEY', '')
 BITUNIX_SECRET_KEY = os.environ.get('BITUNIX_SECRET_KEY', '')
 
-POSITION_SIZE_PERCENT = 1.0  # 1% del balance
-LEVERAGE = 5  # 5x apalancamiento
+POSITION_SIZE_PERCENT = 1.0
+LEVERAGE = 5
 
 BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
@@ -31,36 +31,41 @@ RISK_CONFIG = {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# AUTENTICACIÓN BITUNIX
+# AUTENTICACIÓN BITUNIX - MÚLTIPLES FORMATOS
 # ═════════════════════════════════════════════════════════════════════════════
-def generate_signature(secret_key, timestamp, nonce, method, path, query_string='', body=''):
-    """
-    Genera la firma HMAC SHA256 según docs de Bitunix
-    Formato: timestamp + nonce + method + path + query_string + body
-    """
-    # Asegurar que query_string no tenga el '?' inicial
+def generate_signature_v1(secret_key, timestamp, nonce, method, path, query_string='', body=''):
+    """Formato 1: timestamp + nonce + method + path + query_string + body"""
     if query_string.startswith('?'):
         query_string = query_string[1:]
-    
-    # Construir el mensaje incluyendo el nonce
     message = f"{timestamp}{nonce}{method}{path}{query_string}{body}"
-    
-    print(f"🔐 Mensaje a firmar: {message}")
-    
-    signature = hmac.new(
-        secret_key.encode('utf-8'),
-        message.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    
-    print(f"🔐 Firma generada: {signature}")
-    return signature
+    return hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest(), message
+
+def generate_signature_v2(secret_key, timestamp, nonce, method, path, query_string='', body=''):
+    """Formato 2: nonce + timestamp + method + path + query_string + body"""
+    if query_string.startswith('?'):
+        query_string = query_string[1:]
+    message = f"{nonce}{timestamp}{method}{path}{query_string}{body}"
+    return hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest(), message
+
+def generate_signature_v3(secret_key, timestamp, nonce, method, path, query_string='', body=''):
+    """Formato 3: timestamp + method + path + query_string + body + nonce"""
+    if query_string.startswith('?'):
+        query_string = query_string[1:]
+    message = f"{timestamp}{method}{path}{query_string}{body}{nonce}"
+    return hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest(), message
+
+def generate_signature_v4(secret_key, timestamp, nonce, method, path, query_string='', body=''):
+    """Formato 4: timestamp + method + path + nonce + query_string + body"""
+    if query_string.startswith('?'):
+        query_string = query_string[1:]
+    message = f"{timestamp}{method}{path}{nonce}{query_string}{body}"
+    return hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest(), message
 
 def bitunix_request(method, endpoint, params=None, data=None, auth=False):
-    """Hace una petición a la API de Bitunix"""
+    """Hace una petición a la API de Bitunix probando múltiples formatos de firma"""
     url = f"{BITUNIX_BASE_URL}{endpoint}"
     timestamp = str(int(time.time() * 1000))
-    nonce = secrets.token_hex(8)  # 64 bits = 8 bytes = 16 caracteres hexadecimales
+    nonce = secrets.token_hex(8)  # 64 bits = 16 caracteres hex
     
     headers = {
         'Content-Type': 'application/json',
@@ -72,46 +77,65 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
         headers['timestamp'] = timestamp
         headers['nonce'] = nonce
         
-        # Construir query_string (ordenado alfabéticamente por clave)
         query_string = ''
         if params:
             query_string = '&'.join([f"{k}={v}" for k, v in sorted(params.items())])
         
-        # Construir body (JSON compacto)
         body_str = ''
         if data:
             body_str = json.dumps(data, separators=(',', ':'), sort_keys=True)
         
-        # Generar firma
-        signature = generate_signature(BITUNIX_SECRET_KEY, timestamp, nonce, method, endpoint, query_string, body_str)
-        headers['sign'] = signature
+        # Probar múltiples formatos de firma
+        signature_formats = [
+            ('v1 (timestamp+nonce+method+path+query+body)', generate_signature_v1),
+            ('v2 (nonce+timestamp+method+path+query+body)', generate_signature_v2),
+            ('v3 (timestamp+method+path+query+body+nonce)', generate_signature_v3),
+            ('v4 (timestamp+method+path+nonce+query+body)', generate_signature_v4),
+        ]
         
-        print(f"🔑 Headers de auth:")
-        print(f"   api-key: {BITUNIX_API_KEY[:8]}...")
-        print(f"   timestamp: {timestamp}")
-        print(f"   nonce: {nonce}")
-        print(f"   sign: {signature[:32]}...")
-    
-    try:
-        print(f"🔗 Request: {method} {url}")
-        if params:
-            print(f"📋 Params: {params}")
-        if data:
-            print(f"📦 Data: {body_str}")
+        for format_name, generate_func in signature_formats:
+            print(f"\n Probando formato {format_name}:")
+            signature, message = generate_func(BITUNIX_SECRET_KEY, timestamp, nonce, method, endpoint, query_string, body_str)
+            print(f"   Mensaje: {message}")
+            print(f"   Firma: {signature[:32]}...")
+            
+            headers['sign'] = signature
+            
+            try:
+                if method == 'GET':
+                    response = requests.get(url, params=params, headers=headers, timeout=10)
+                elif method == 'POST':
+                    response = requests.post(url, data=body_str, headers=headers, timeout=10)
+                
+                print(f"   Status: {response.status_code}")
+                print(f"   Response: {response.text[:200]}")
+                
+                result = response.json()
+                if result.get('code') == 0:
+                    print(f"   ✅ ¡FORMATO CORRECTO: {format_name}!")
+                    return result
+                else:
+                    print(f"   ❌ Error: {result.get('msg')}")
+            except Exception as e:
+                print(f"   ❌ Error: {e}")
         
-        if method == 'GET':
-            response = requests.get(url, params=params, headers=headers, timeout=10)
-        elif method == 'POST':
-            response = requests.post(url, data=body_str, headers=headers, timeout=10)
-        
-        print(f"📡 Response status: {response.status_code}")
-        print(f" Response body: {response.text[:500]}")
-        
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"❌ Error en API request: {e}")
+        print(f"\n❌ Ningún formato de firma funcionó")
         return None
+    else:
+        try:
+            if method == 'GET':
+                response = requests.get(url, params=params, headers=headers, timeout=10)
+            elif method == 'POST':
+                response = requests.post(url, data=body_str if data else None, headers=headers, timeout=10)
+            
+            print(f"📡 Response status: {response.status_code}")
+            print(f"📡 Response body: {response.text[:500]}")
+            
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f" Error en API request: {e}")
+            return None
 
 # ════════════════════════════════════════════════════════════════════════════
 # FUNCIONES DE BITUNIX
@@ -120,22 +144,22 @@ def get_balance():
     print("🔍 Obteniendo balance...")
     result = bitunix_request('GET', '/api/v1/futures/account', auth=True)
     
-    if result:
-        if result.get('code') == 0:
-            data = result.get('data', {})
-            
-            if isinstance(data, list):
-                for item in data:
-                    if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
-                        free = float(item.get('available', item.get('availableBalance', 0)))
-                        print(f"💰 Balance USDT disponible: {free:.2f}")
-                        return free
-            elif isinstance(data, dict):
-                free = float(data.get('available', data.get('availableBalance', data.get('balance', 0))))
-                print(f"💰 Balance USDT disponible: {free:.2f}")
-                return free
+    if result and result.get('code') == 0:
+        data = result.get('data', {})
+        print(f"📊 Data recibida: {data}")
+        
+        if isinstance(data, list):
+            for item in data:
+                if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
+                    free = float(item.get('available', item.get('availableBalance', 0)))
+                    print(f"💰 Balance USDT disponible: {free:.2f}")
+                    return free
+        elif isinstance(data, dict):
+            free = float(data.get('available', data.get('availableBalance', data.get('balance', 0))))
+            print(f"💰 Balance USDT disponible: {free:.2f}")
+            return free
     
-    print(f"⚠️ No se pudo obtener balance. Respuesta: {result}")
+    print(f"⚠️ No se pudo obtener balance")
     return 0
 
 def get_klines(symbol, interval='15m', limit=20):
@@ -162,7 +186,6 @@ def calculate_atr_from_klines(klines, period=14):
         high = float(klines[i][2])
         low = float(klines[i][3])
         prev_close = float(klines[i-1][4])
-        
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         true_ranges.append(tr)
     
@@ -171,7 +194,7 @@ def calculate_atr_from_klines(klines, period=14):
     return atr
 
 def set_leverage(symbol, leverage):
-    print(f"⚙️ Configurando apalancamiento {leverage}x para {symbol}...")
+    print(f"️ Configurando apalancamiento {leverage}x para {symbol}...")
     result = bitunix_request('POST', '/api/v1/futures/account/change_leverage', data={
         'symbol': symbol,
         'leverage': leverage,
@@ -179,10 +202,10 @@ def set_leverage(symbol, leverage):
     }, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"✅ Apalancamiento configurado correctamente")
+        print(f"✅ Apalancamiento configurado")
         return True
     else:
-        print(f"⚠️ Error configurando apalancamiento: {result}")
+        print(f"⚠️ Error: {result}")
         return False
 
 def place_order(symbol, side, qty):
@@ -199,7 +222,7 @@ def place_order(symbol, side, qty):
         print(f"✅ Orden ejecutada: {result.get('data')}")
         return result.get('data')
     else:
-        print(f"❌ Error en orden: {result}")
+        print(f"❌ Error: {result}")
         return None
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -257,7 +280,7 @@ def execute_order(action, raw_symbol, entry_price):
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
         print(f"💰 Cantidad calculada: {quantity}")
         
-        print("⚠️ MODO PRUEBA: Orden NO ejecutada. Para activar, descomenta place_order en el código.")
+        print("⚠️ MODO PRUEBA: Orden NO ejecutada")
         # side = 'BUY' if action == 'LONG' else 'SELL'
         # order_result = place_order(symbol, side, quantity)
         # print(f"✅ Resultado: {order_result}")
