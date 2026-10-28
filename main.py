@@ -91,21 +91,34 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
 # ═════════════════════════════════════════════════════════════════════════════
 def get_balance():
     print("🔍 Obteniendo balance...")
-    result = bitunix_request('GET', '/api/v1/futures/account/get_single_account', auth=True)
+    # Endpoint CORRECTO según documentación oficial
+    result = bitunix_request('GET', '/api/v1/futures/account', auth=True)
     
     if result:
+        print(f"📊 Respuesta: {result}")
         if result.get('code') == 0:
             data = result.get('data', {})
+            
+            # Buscar balance de USDT
             if isinstance(data, list):
                 for item in data:
-                    if item.get('marginCoin') == 'USDT':
-                        free = float(item.get('available', 0))
+                    if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
+                        free = float(item.get('available', item.get('availableBalance', 0)))
                         print(f"💰 Balance USDT disponible: {free:.2f}")
                         return free
             elif isinstance(data, dict):
-                free = float(data.get('available', 0))
+                free = float(data.get('available', data.get('availableBalance', 0)))
                 print(f"💰 Balance USDT disponible: {free:.2f}")
                 return free
+            elif isinstance(data, str):
+                # A veces el balance viene como string
+                try:
+                    free = float(data)
+                    print(f"💰 Balance USDT disponible: {free:.2f}")
+                    return free
+                except:
+                    pass
+    
     print(f"⚠️ No se pudo obtener balance. Respuesta: {result}")
     return 0
 
