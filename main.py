@@ -62,7 +62,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
     """Hace petición a API de Bitunix"""
     url = f"{BITUNIX_BASE_URL}{endpoint}"
     
-    # Timestamp en formato YYYYMMDDHHmmss (según ejemplo de docs)
+    # Timestamp en formato YYYYMMDDHHmmss
     timestamp = time.strftime('%Y%m%d%H%M%S', time.gmtime())
     nonce = secrets.token_hex(8)  # 64 bits = 16 caracteres hex
     
@@ -71,19 +71,21 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
         'language': 'en-US'
     }
     
+    # Inicializar query_string y body_str
+    query_string = ''
+    body_str = ''
+    
     if auth:
         headers['api-key'] = BITUNIX_API_KEY
         headers['timestamp'] = timestamp
         headers['nonce'] = nonce
         
         # Construir queryParams (ordenados ASCII)
-        query_string = ''
         if params:
             sorted_params = sorted(params.items())
             query_string = ''.join([f"{k}{v}" for k, v in sorted_params])
         
         # Construir body (JSON sin espacios)
-        body_str = ''
         if data:
             body_str = json.dumps(data, separators=(',', ':'), sort_keys=True)
         
@@ -91,7 +93,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
         signature = generate_signature(BITUNIX_SECRET_KEY, timestamp, nonce, BITUNIX_API_KEY, query_string, body_str)
         headers['sign'] = signature
         
-        print(f"🔑 Headers:")
+        print(f" Headers:")
         print(f"   api-key: {BITUNIX_API_KEY[:8]}...")
         print(f"   timestamp: {timestamp}")
         print(f"   nonce: {nonce}")
@@ -100,7 +102,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
     try:
         print(f"🔗 Request: {method} {url}")
         if params:
-            print(f"📋 QueryParams (ordenados): {query_string}")
+            print(f"📋 QueryParams: {query_string}")
         if data:
             print(f"📦 Body: {body_str}")
         
@@ -109,7 +111,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
         elif method == 'POST':
             response = requests.post(url, data=body_str, headers=headers, timeout=10)
         
-        print(f"📡 Response status: {response.status_code}")
+        print(f" Response status: {response.status_code}")
         print(f"📡 Response body: {response.text[:500]}")
         
         response.raise_for_status()
