@@ -272,10 +272,10 @@ def execute_order(action, raw_symbol, entry_price):
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
         print(f"💰 Cantidad calculada: {quantity}")
         
-        print("⚠️ MODO PRUEBA: Orden NO ejecutada. Para activar, descomenta place_order en el código.")
-        # side = 'BUY' if action == 'LONG' else 'SELL'
-        # order_result = place_order(symbol, side, quantity)
-        # print(f"✅ Resultado: {order_result}")
+        print(" EJECUTANDO ORDEN REAL...")
+side = 'BUY' if action == 'LONG' else 'SELL'
+order_result = place_order(symbol, side, quantity)
+print(f"✅ Resultado: {order_result}")
         
         print(f"{'='*60}\n")
         
