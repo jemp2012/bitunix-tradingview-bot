@@ -5,6 +5,8 @@ import time
 import hmac
 import hashlib
 import requests
+import secrets
+import json
 
 app = Flask(__name__)
 
@@ -17,8 +19,7 @@ BITUNIX_SECRET_KEY = os.environ.get('BITUNIX_SECRET_KEY', '')
 POSITION_SIZE_PERCENT = 1.0  # 1% del balance
 LEVERAGE = 5  # 5x apalancamiento
 
-# Base URL de Bitunix API
-BITUNIX_BASE_URL = 'https://openapi.bitunix.com'
+BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
 RISK_CONFIG = {
     'ZEC': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
@@ -30,11 +31,11 @@ RISK_CONFIG = {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# FUNCIONES AUXILIARES DE BITUNIX API
+# AUTENTICACIÓN BITUNIX
 # ═════════════════════════════════════════════════════════════════════════════
-def generate_signature(secret_key, timestamp, method, path, query_string=''):
-    """Genera la firma HMAC SHA256 para autenticación"""
-    message = f"{timestamp}{method}{path}{query_string}"
+def generate_signature(secret_key, timestamp, nonce, method, path, query_string='', body=''):
+    """Genera la firma HMAC SHA256 según docs de Bitunix"""
+    message = f"{timestamp}{method}{path}{query_string}{body}"
     signature = hmac.new(
         secret_key.encode('utf-8'),
         message.encode('utf-8'),
@@ -46,26 +47,38 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
     """Hace una petición a la API de Bitunix"""
     url = f"{BITUNIX_BASE_URL}{endpoint}"
     timestamp = str(int(time.time() * 1000))
+    nonce = secrets.token_hex(32)  # 64 caracteres hex
     
     headers = {
         'Content-Type': 'application/json',
-        'X-BU-API-KEY': BITUNIX_API_KEY if auth else '',
-        'X-BU-TIMESTAMP': timestamp if auth else '',
+        'language': 'en-US'
     }
     
     if auth:
+        headers['api-key'] = BITUNIX_API_KEY
+        headers['timestamp'] = timestamp
+        headers['nonce'] = nonce
+        
         query_string = ''
         if params:
-            query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            query_string = '?' + '&'.join([f"{k}={v}" for k, v in params.items()])
         
-        signature = generate_signature(BITUNIX_SECRET_KEY, timestamp, method, endpoint, query_string)
-        headers['X-BU-SIGNATURE'] = signature
+        body_str = ''
+        if data:
+            body_str = json.dumps(data, separators=(',', ':'))
+        
+        signature = generate_signature(BITUNIX_SECRET_KEY, timestamp, nonce, method, endpoint, query_string, body_str)
+        headers['sign'] = signature
     
     try:
+        print(f"🔗 Request: {method} {url}")
         if method == 'GET':
             response = requests.get(url, params=params, headers=headers, timeout=10)
         elif method == 'POST':
-            response = requests.post(url, json=data, headers=headers, timeout=10)
+            response = requests.post(url, data=body_str if data else None, headers=headers, timeout=10)
+        
+        print(f"📡 Response status: {response.status_code}")
+        print(f"📡 Response body: {response.text[:500]}")
         
         response.raise_for_status()
         return response.json()
@@ -73,34 +86,46 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
         print(f"❌ Error en API request: {e}")
         return None
 
+# ════════════════════════════════════════════════════════════════════════════
+# FUNCIONES DE BITUNIX
+# ═════════════════════════════════════════════════════════════════════════════
 def get_balance():
-    """Obtiene el balance de la cuenta"""
-    result = bitunix_request('GET', '/openApi/swap/v2/user/balance', auth=True)
-    if result and result.get('code') == 0:
-        data = result.get('data', {})
-        # Buscar balance de USDT
-        for item in data.get('list', []):
-            if item.get('coin') == 'USDT':
-                free = float(item.get('availableBalance', 0))
-                print(f"💰 Balance USDT: {free:.2f}")
+    print("🔍 Obteniendo balance...")
+    result = bitunix_request('GET', '/api/v1/futures/account/get_single_account', auth=True)
+    
+    if result:
+        if result.get('code') == 0:
+            data = result.get('data', {})
+            if isinstance(data, list):
+                for item in data:
+                    if item.get('marginCoin') == 'USDT':
+                        free = float(item.get('available', 0))
+                        print(f"💰 Balance USDT disponible: {free:.2f}")
+                        return free
+            elif isinstance(data, dict):
+                free = float(data.get('available', 0))
+                print(f"💰 Balance USDT disponible: {free:.2f}")
                 return free
     print(f"⚠️ No se pudo obtener balance. Respuesta: {result}")
     return 0
 
 def get_klines(symbol, interval='15m', limit=20):
-    """Obtiene datos de velas para calcular ATR"""
-    result = bitunix_request('GET', '/openApi/swap/v2/quote/klines', params={
+    print(f"🔍 Obteniendo klines para {symbol}...")
+    result = bitunix_request('GET', '/api/v1/futures/market/kline', params={
         'symbol': symbol,
         'interval': interval,
         'limit': limit
     })
+    
     if result and result.get('code') == 0:
-        return result.get('data', [])
+        klines = result.get('data', [])
+        print(f"✅ Klines recibidos: {len(klines)}")
+        return klines
     return []
 
 def calculate_atr_from_klines(klines, period=14):
-    """Calcula ATR desde datos de velas"""
     if len(klines) < period + 1:
+        print(f"⚠️ No hay suficientes klines: {len(klines)}")
         return None
     
     true_ranges = []
@@ -109,67 +134,55 @@ def calculate_atr_from_klines(klines, period=14):
         low = float(klines[i][3])
         prev_close = float(klines[i-1][4])
         
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         true_ranges.append(tr)
     
     atr = sum(true_ranges[-period:]) / period
+    print(f"✅ ATR calculado: {atr}")
     return atr
 
 def set_leverage(symbol, leverage):
-    """Configura el apalancamiento"""
-    result = bitunix_request('POST', '/openApi/swap/v2/trade/leverage', data={
+    print(f"⚙️ Configurando apalancamiento {leverage}x para {symbol}...")
+    # ENDPOINT CORREGIDO SEGÚN DOCUMENTACIÓN
+    result = bitunix_request('POST', '/api/v1/futures/account/change_leverage', data={
         'symbol': symbol,
-        'leverage': leverage
+        'leverage': leverage,
+        'marginCoin': 'USDT'
     }, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"⚙️ Apalancamiento configurado: {leverage}x para {symbol}")
+        print(f"✅ Apalancamiento configurado correctamente")
         return True
     else:
-        print(f"⚠️ No se pudo configurar apalancamiento: {result}")
+        print(f"⚠️ Error configurando apalancamiento: {result}")
         return False
 
-def place_order(symbol, side, quantity):
-    """Coloca una orden de mercado"""
-    result = bitunix_request('POST', '/openApi/swap/v2/trade/order', data={
+def place_order(symbol, side, qty):
+    print(f"📤 Colocando orden {side} de {qty} {symbol}...")
+    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', data={
         'symbol': symbol,
-        'side': side,  # 'BUY' para LONG, 'SELL' para SHORT
-        'positionSide': 'BOTH',
-        'type': 'MARKET',
-        'quantity': quantity
-    }, auth=True)
-    
-    return result
-
-def place_stop_loss(symbol, side, quantity, stop_price):
-    """Coloca una orden de Stop Loss"""
-    result = bitunix_request('POST', '/openApi/swap/v2/trade/order', data={
-        'symbol': symbol,
+        'qty': str(qty),
         'side': side,
-        'positionSide': 'BOTH',
-        'type': 'STOP_MARKET',
-        'quantity': quantity,
-        'stopPrice': stop_price,
-        'closePosition': 'false'
+        'tradeSide': 'OPEN',
+        'orderType': 'MARKET'
     }, auth=True)
     
-    return result
+    if result and result.get('code') == 0:
+        print(f"✅ Orden ejecutada: {result.get('data')}")
+        return result.get('data')
+    else:
+        print(f"❌ Error en orden: {result}")
+        return None
 
-# ═════════════════════════════════════════════════════════════════════════════
-# FUNCIONES DE CONVERSIÓN Y CÁLCULO
+# ════════════════════════════════════════════════════════════════════════════
+# LÓGICA DE TRADING
 # ═════════════════════════════════════════════════════════════════════════════
 def convert_symbol(symbol):
-    """Convierte ZECUSDT.P a ZECUSDT (formato Bitunix API)"""
     if '.P' in symbol:
         return symbol.replace('.P', '')
     return symbol
 
 def get_risk_params(symbol, entry_price, atr):
-    """Calcula Stop Loss y Take Profit"""
     risk = RISK_CONFIG.get(symbol, RISK_CONFIG['default'])
     sl_mult, tp_rr = risk['sl_atr_mult'], risk['tp_rr']
     
@@ -185,70 +198,65 @@ def get_risk_params(symbol, entry_price, atr):
     }
 
 def calculate_quantity(balance, entry_price, percent, leverage):
-    """Calcula la cantidad de contratos"""
     usdt_to_use = balance * (percent / 100)
     buying_power = usdt_to_use * leverage
     quantity = buying_power / entry_price
-    return round(quantity, 3)  # Ajustar precisión según el activo
+    return round(quantity, 3)
 
-# ═════════════════════════════════════════════════════════════════════════════
-# EJECUCIÓN DE ORDEN
-# ═════════════════════════════════════════════════════════════════════════════
 def execute_order(action, raw_symbol, entry_price):
     try:
-        symbol = convert_symbol(raw_symbol)
-        print(f" Símbolo: {raw_symbol} -> {symbol}")
+        print(f"\n{'='*60}")
+        print(f"🚀 Iniciando ejecución: {action} {raw_symbol} @ {entry_price}")
+        print(f"{'='*60}\n")
         
-        # 1. Obtener balance
+        symbol = convert_symbol(raw_symbol)
+        print(f"✅ Símbolo convertido: {raw_symbol} -> {symbol}")
+        
+        # 1. Balance
         balance = get_balance()
         if balance <= 0:
-            print("❌ Sin balance")
+            print("❌ Balance es 0 o error")
             return
         
-        # 2. Configurar apalancamiento
+        # 2. Apalancamiento
         set_leverage(symbol, LEVERAGE)
         
-        # 3. Obtener velas y calcular ATR
+        # 3. ATR
         klines = get_klines(symbol, '15m', 20)
         atr = calculate_atr_from_klines(klines, 14)
-        print(f" ATR: {atr}")
         
-        # 4. Calcular niveles de riesgo
+        # 4. Riesgo
         risk_params = get_risk_params(symbol, float(entry_price), atr)
         params = risk_params[action]
         print(f"📊 SL: {params['sl']} | TP: {params['tp']}")
         
-        # 5. Calcular cantidad
+        # 5. Cantidad
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
-        print(f"💰 Cantidad: {quantity}")
+        print(f"💰 Cantidad calculada: {quantity}")
         
-        # 6. Ejecutar orden (MODO PRUEBA - descomentar para producción)
-        print(f"️ MODO PRUEBA: Orden NO ejecutada")
-        
-        # Para producción, descomentar estas líneas:
+        # 6. MODO PRUEBA (Descomenta las siguientes 3 líneas para operar de verdad)
+        print("⚠️ MODO PRUEBA: Orden NO ejecutada. Para activar, descomenta place_order en el código.")
         # side = 'BUY' if action == 'LONG' else 'SELL'
         # order_result = place_order(symbol, side, quantity)
-        # print(f"📤 Orden ejecutada: {order_result}")
+        # print(f"✅ Resultado: {order_result}")
         
-        # 7. Colocar Stop Loss (MODO PRUEBA)
-        # sl_side = 'SELL' if action == 'LONG' else 'BUY'
-        # sl_result = place_stop_loss(symbol, sl_side, quantity, params['sl'])
-        # print(f"🛡️ Stop Loss colocado: {sl_result}")
+        print(f"{'='*60}\n")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error en execute_order: {e}")
         import traceback
         traceback.print_exc()
 
 def process_order(action, symbol, price):
+    print(f"\n🔔 Process order llamado: {action} {symbol} {price}")
     if not BITUNIX_API_KEY:
         print("❌ Faltan API Keys")
         return
     execute_order(action, symbol, float(price))
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # WEBHOOKS
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 @app.route('/', methods=['GET'])
 def index():
     return 'Bot running!'
@@ -261,11 +269,12 @@ def health():
 def webhook():
     try:
         message = request.get_data(as_text=True)
-        print(f"📨 {message}")
+        print(f"📨 Webhook recibido: {message}")
         parts = message.split('|')
         if len(parts) >= 3:
             action, symbol, price = parts[0].strip().upper(), parts[1].strip(), parts[2].strip()
             if action in ['LONG', 'SHORT']:
+                print(f"✅ Acción válida: {action}")
                 threading.Thread(target=process_order, args=(action, symbol, price)).start()
                 return jsonify({'status': 'success'}), 200
         return jsonify({'status': 'error'}), 400
