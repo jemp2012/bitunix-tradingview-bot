@@ -273,9 +273,9 @@ def execute_order(action, raw_symbol, entry_price):
         print(f"💰 Cantidad calculada: {quantity}")
         
         print(" EJECUTANDO ORDEN REAL...")
-side = 'BUY' if action == 'LONG' else 'SELL'
-order_result = place_order(symbol, side, quantity)
-print(f"✅ Resultado: {order_result}")
+        side = 'BUY' if action == 'LONG' else 'SELL'
+        order_result = place_order(symbol, side, quantity)
+        print(f"✅ Resultado: {order_result}")
         
         print(f"{'='*60}\n")
         
