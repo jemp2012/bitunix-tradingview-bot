@@ -149,14 +149,16 @@ def get_position_id(symbol):
                     return pos.get('positionId')
     return None
 
-def place_stop_loss(symbol, position_id, sl_price):
-    """Coloca Stop Loss usando el endpoint correcto de Bitunix"""
-    print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
-    result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data={
+def place_stop_loss(symbol, position_id, qty, sl_price):
+    """Coloca Stop Loss usando el endpoint correcto de Bitunix con slQty"""
+    print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id}, Qty: {qty})...")
+    result = bitunix_request('POST', '/api/v1/futures/tpsl/place_order', data={
         'symbol': symbol,
         'positionId': str(position_id),
-        'slPrice': str(round(sl_price, 2)),
-        'slStopType': 'LAST_PRICE'
+        'slPrice': str(round(sl_price, 4)),
+        'slStopType': 'LAST_PRICE',
+        'slOrderType': 'MARKET',
+        'slQty': str(qty)  # Parámetro requerido según la documentación
     }, auth=True)
     
     if result and result.get('code') == 0:
@@ -206,7 +208,7 @@ def monitor_position(symbol, entry_price, action, qty, initial_sl, position_id):
             
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
                 print(f"🎯 ¡BE activado! PnL: {pnl_pct:.2f}%")
-                place_stop_loss(symbol, position_id, entry_price)
+                place_stop_loss(symbol, position_id, qty, entry_price)
                 be_activated = True
                 trailing_activated = True
             
@@ -214,12 +216,12 @@ def monitor_position(symbol, entry_price, action, qty, initial_sl, position_id):
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl > entry_price:
-                        place_stop_loss(symbol, position_id, new_sl)
+                        place_stop_loss(symbol, position_id, qty, new_sl)
                         print(f"📈 Trailing SL actualizado: {new_sl:.2f} (Highest: {highest_price:.2f})")
                 else:
                     new_sl = lowest_price * (1 + TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl < entry_price:
-                        place_stop_loss(symbol, position_id, new_sl)
+                        place_stop_loss(symbol, position_id, qty, new_sl)
                         print(f"📉 Trailing SL actualizado: {new_sl:.2f} (Lowest: {lowest_price:.2f})")
             
             time.sleep(TRAILING_CONFIG['check_interval'])
@@ -295,7 +297,7 @@ def execute_order(action, raw_symbol, entry_price):
             if position_id:
                 print(f"✅ Position ID obtenido: {position_id}")
                 print(f"🛡️ Colocando Stop Loss inicial...")
-                sl_result = place_stop_loss(symbol, position_id, params['sl'])
+                sl_result = place_stop_loss(symbol, position_id, quantity, params['sl'])
                 
                 if sl_result:
                     print(f"👁️ Iniciando hilo de monitoreo BE/Trailing...")
