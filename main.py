@@ -160,15 +160,24 @@ def get_klines(symbol, interval='15m', limit=20):
     return []
 
 def calculate_atr_from_klines(klines, period=14):
+    """Calcula ATR desde klines (formato diccionario)"""
     if len(klines) < period + 1:
         print(f"⚠️ No hay suficientes klines: {len(klines)}")
         return None
     
     true_ranges = []
     for i in range(1, len(klines)):
-        high = float(klines[i][2])
-        low = float(klines[i][3])
-        prev_close = float(klines[i-1][4])
+        # Los klines vienen como diccionarios, no arrays
+        if isinstance(klines[i], dict):
+            high = float(klines[i].get('high', 0))
+            low = float(klines[i].get('low', 0))
+            prev_close = float(klines[i-1].get('close', 0))
+        else:
+            # Fallback por si vienen como arrays
+            high = float(klines[i][2])
+            low = float(klines[i][3])
+            prev_close = float(klines[i-1][4])
+        
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         true_ranges.append(tr)
     
