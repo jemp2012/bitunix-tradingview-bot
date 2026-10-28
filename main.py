@@ -34,13 +34,26 @@ RISK_CONFIG = {
 # AUTENTICACIÓN BITUNIX
 # ═════════════════════════════════════════════════════════════════════════════
 def generate_signature(secret_key, timestamp, nonce, method, path, query_string='', body=''):
-    """Genera la firma HMAC SHA256 según docs de Bitunix"""
+    """
+    Genera la firma HMAC SHA256 según docs de Bitunix
+    Formato exacto: timestamp + method + path + query_string + body
+    """
+    # Asegurar que query_string no tenga el '?' inicial si lo tuviera
+    if query_string.startswith('?'):
+        query_string = query_string[1:]
+    
+    # Construir el mensaje exacto que Bitunix espera
     message = f"{timestamp}{method}{path}{query_string}{body}"
+    
+    print(f"🔐 Mensaje a firmar: {message}")
+    
     signature = hmac.new(
         secret_key.encode('utf-8'),
         message.encode('utf-8'),
         hashlib.sha256
     ).hexdigest()
+    
+    print(f"🔐 Firma generada: {signature}")
     return signature
 
 def bitunix_request(method, endpoint, params=None, data=None, auth=False):
@@ -59,23 +72,37 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
         headers['timestamp'] = timestamp
         headers['nonce'] = nonce
         
+        # Construir query_string (ordenado alfabéticamente por clave)
         query_string = ''
         if params:
-            query_string = '?' + '&'.join([f"{k}={v}" for k, v in params.items()])
+            query_string = '&'.join([f"{k}={v}" for k, v in sorted(params.items())])
         
+        # Construir body (JSON compacto)
         body_str = ''
         if data:
             body_str = json.dumps(data, separators=(',', ':'))
         
+        # Generar firma
         signature = generate_signature(BITUNIX_SECRET_KEY, timestamp, nonce, method, endpoint, query_string, body_str)
         headers['sign'] = signature
+        
+        print(f"🔑 Headers de auth:")
+        print(f"   api-key: {BITUNIX_API_KEY[:8]}...")
+        print(f"   timestamp: {timestamp}")
+        print(f"   nonce: {nonce[:16]}...")
+        print(f"   sign: {signature[:32]}...")
     
     try:
         print(f"🔗 Request: {method} {url}")
+        if params:
+            print(f"📋 Params: {params}")
+        if data:
+            print(f"📦 Data: {body_str}")
+        
         if method == 'GET':
             response = requests.get(url, params=params, headers=headers, timeout=10)
         elif method == 'POST':
-            response = requests.post(url, data=body_str if data else None, headers=headers, timeout=10)
+            response = requests.post(url, data=body_str, headers=headers, timeout=10)
         
         print(f"📡 Response status: {response.status_code}")
         print(f"📡 Response body: {response.text[:500]}")
@@ -91,15 +118,14 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False):
 # ═════════════════════════════════════════════════════════════════════════════
 def get_balance():
     print("🔍 Obteniendo balance...")
-    # Endpoint CORRECTO según documentación oficial
+    # Endpoint CORRECTO según documentación oficial de Bitunix
     result = bitunix_request('GET', '/api/v1/futures/account', auth=True)
     
     if result:
-        print(f"📊 Respuesta: {result}")
         if result.get('code') == 0:
             data = result.get('data', {})
             
-            # Buscar balance de USDT
+            # Buscar balance de USDT (la estructura puede variar ligeramente)
             if isinstance(data, list):
                 for item in data:
                     if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
@@ -107,17 +133,9 @@ def get_balance():
                         print(f"💰 Balance USDT disponible: {free:.2f}")
                         return free
             elif isinstance(data, dict):
-                free = float(data.get('available', data.get('availableBalance', 0)))
+                free = float(data.get('available', data.get('availableBalance', data.get('balance', 0))))
                 print(f"💰 Balance USDT disponible: {free:.2f}")
                 return free
-            elif isinstance(data, str):
-                # A veces el balance viene como string
-                try:
-                    free = float(data)
-                    print(f"💰 Balance USDT disponible: {free:.2f}")
-                    return free
-                except:
-                    pass
     
     print(f"⚠️ No se pudo obtener balance. Respuesta: {result}")
     return 0
@@ -156,7 +174,6 @@ def calculate_atr_from_klines(klines, period=14):
 
 def set_leverage(symbol, leverage):
     print(f"⚙️ Configurando apalancamiento {leverage}x para {symbol}...")
-    # ENDPOINT CORREGIDO SEGÚN DOCUMENTACIÓN
     result = bitunix_request('POST', '/api/v1/futures/account/change_leverage', data={
         'symbol': symbol,
         'leverage': leverage,
@@ -295,4 +312,5 @@ def webhook():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=False)
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
