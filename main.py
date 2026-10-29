@@ -15,8 +15,8 @@ app = Flask(__name__)
 BITUNIX_API_KEY = os.environ.get('BITUNIX_API_KEY', '')
 BITUNIX_SECRET_KEY = os.environ.get('BITUNIX_SECRET_KEY', '')
 
-POSITION_SIZE_PERCENT = 1.0
-LEVERAGE = 5
+POSITION_SIZE_PERCENT = 1.0  # 1% del balance
+LEVERAGE = 5                 # 5x apalancamiento
 
 BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
@@ -30,13 +30,13 @@ RISK_CONFIG = {
 }
 
 TRAILING_CONFIG = {
-    'activation_pct': 1.0,
-    'trail_pct': 0.5,
-    'check_interval': 10
+    'activation_pct': 1.0,   # Activar BE/Trailing al 1% de ganancia
+    'trail_pct': 0.5,        # Distancia del trailing stop (0.5%)
+    'check_interval': 10     # Verificar cada 10 segundos
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# AUTENTICACIÓN
+# AUTENTICACIÓN (SHA256 DOBLE)
 # ═════════════════════════════════════════════════════════════════════════════
 def sha256_hex(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -81,7 +81,6 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
             
             if response.status_code == 200:
                 result = response.json()
-                
                 if result.get('code') == 0:
                     return result
                 else:
@@ -93,12 +92,10 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
-                    
         except Exception as e:
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
-    
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -147,60 +144,21 @@ def set_leverage(symbol, leverage):
     }, auth=True)
     return result and result.get('code') == 0
 
-def get_trading_pair_info(symbol):
-    """Obtiene información del trading pair (precisión, modo, etc.)"""
-    print(f"🔍 Obteniendo info de {symbol}...")
-    
-    # Intentar obtener todos los pares
-    result = bitunix_request('GET', '/api/v1/futures/market/get_trading_pairs')
-    
-    if result and result.get('code') == 0:
-        data = result.get('data', [])
-        if isinstance(data, list):
-            for pair in data:
-                if pair.get('symbol') == symbol:
-                    print(f"✅ Par encontrado: {pair}")
-                    return pair
-        elif isinstance(data, dict):
-            print(f"✅ Par encontrado: {data}")
-            return data
-    
-    print(f"️ No se encontró info de {symbol}")
-    return None
-
 def place_order(symbol, side, qty):
-    """Coloca orden usando información del trading pair"""
-    print(f" Colocando orden {side} de {qty} {symbol}...")
-    
-    # Obtener info del par
-    pair_info = get_trading_pair_info(symbol)
-    
-    if pair_info:
-        # Usar precisión correcta
-        qty_precision = pair_info.get('qtyPrecision', 3)
-        qty = round(qty, qty_precision)
-        print(f"📊 Precisión de cantidad: {qty_precision} decimales")
-        print(f"📊 Cantidad ajustada: {qty}")
-    
-    # Formato básico que funcionó con ZEC
-    data = {
+    print(f"📤 Colocando orden {side} de {qty} {symbol}...")
+    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', data={
         'symbol': symbol,
         'qty': str(qty),
         'side': side,
         'tradeSide': 'OPEN',
         'orderType': 'MARKET'
-    }
-    
-    print(f"📦 Data final: {data}")
-    
-    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                            data=data, auth=True, max_retries=3)
+    }, auth=True, max_retries=3)
     
     if result and result.get('code') == 0:
         print(f"✅ Orden ejecutada: {result.get('data')}")
         return result.get('data')
     else:
-        print(f"❌ Error: {result}")
+        print(f"❌ Error en orden: {result}")
         return None
 
 def get_position_id(symbol):
@@ -213,25 +171,30 @@ def get_position_id(symbol):
                     return pos.get('positionId')
     return None
 
-def place_stop_loss(symbol, position_id, qty, sl_price):
-    print(f"️ Colocando SL en {sl_price} para {symbol}...")
+def place_stop_loss(symbol, position_id, sl_price):
+    """
+    Coloca Stop Loss usando el endpoint EXACTO de la documentación para posiciones.
+    Endpoint: POST /api/v1/futures/tpsl/position/place_order
+    Nota: No requiere 'slQty' porque cierra toda la posición automáticamente al activarse.
+    """
+    print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
     
     data = {
         'symbol': symbol,
         'positionId': str(position_id),
         'slPrice': str(round(sl_price, 4)),
-        'slStopType': 'LAST_PRICE',
-        'slQty': str(qty)
+        'slStopType': 'LAST_PRICE'
     }
     
-    result = bitunix_request('POST', '/api/v1/futures/tpsl/place_order', 
-                            data=data, auth=True)
+    print(f"📋 Payload SL: {data}")
+    
+    result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"✅ SL colocado: {sl_price}")
+        print(f"✅ Stop Loss colocado exitosamente: {sl_price}")
         return result.get('data')
     else:
-        print(f"⚠️ Error SL: {result}")
+        print(f"⚠️ Error colocando SL: {result}")
         return None
 
 def get_current_price(symbol):
@@ -245,10 +208,11 @@ def get_current_price(symbol):
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
-# MONITOREO
+# MONITOREO (BE + TRAILING STOP)
 # ═════════════════════════════════════════════════════════════════════════════
-def monitor_position(symbol, entry_price, action, qty, initial_sl, position_id):
-    print(f"\n👁️ Monitoreo: {symbol} {action}")
+def monitor_position(symbol, entry_price, action, initial_sl, position_id):
+    print(f"\n👁️ Iniciando monitoreo de posición: {symbol} {action}")
+    print(f"   Entry: {entry_price} | SL inicial: {initial_sl}")
     
     trailing_activated = False
     be_activated = False
@@ -271,31 +235,33 @@ def monitor_position(symbol, entry_price, action, qty, initial_sl, position_id):
                 if current_price < lowest_price:
                     lowest_price = current_price
             
+            # Activar Break Even al 1%
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
-                print(f"🎯 BE activado! PnL: {pnl_pct:.2f}%")
-                place_stop_loss(symbol, position_id, qty, entry_price)
+                print(f"🎯 ¡BE activado! PnL: {pnl_pct:.2f}%")
+                place_stop_loss(symbol, position_id, entry_price)
                 be_activated = True
                 trailing_activated = True
             
+            # Trailing Stop después de activar BE
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl > entry_price:
-                        place_stop_loss(symbol, position_id, qty, new_sl)
-                        print(f" Trailing SL: {new_sl:.2f}")
+                        place_stop_loss(symbol, position_id, new_sl)
+                        print(f"📈 Trailing SL actualizado: {new_sl:.2f} (Highest: {highest_price:.2f})")
                 else:
                     new_sl = lowest_price * (1 + TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl < entry_price:
-                        place_stop_loss(symbol, position_id, qty, new_sl)
-                        print(f" Trailing SL: {new_sl:.2f}")
+                        place_stop_loss(symbol, position_id, new_sl)
+                        print(f"📉 Trailing SL actualizado: {new_sl:.2f} (Lowest: {lowest_price:.2f})")
             
             time.sleep(TRAILING_CONFIG['check_interval'])
         except Exception as e:
-            print(f"⚠️ Error monitoreo: {e}")
+            print(f"⚠️ Error en monitoreo: {e}")
             time.sleep(TRAILING_CONFIG['check_interval'])
 
 # ════════════════════════════════════════════════════════════════════════════
-# TRADING
+# LÓGICA DE TRADING
 # ═════════════════════════════════════════════════════════════════════════════
 def convert_symbol(symbol):
     if '.P' in symbol:
@@ -326,15 +292,15 @@ def calculate_quantity(balance, entry_price, percent, leverage):
 def execute_order(action, raw_symbol, entry_price):
     try:
         print(f"\n{'='*60}")
-        print(f" Ejecución: {action} {raw_symbol} @ {entry_price}")
+        print(f"🚀 Iniciando ejecución: {action} {raw_symbol} @ {entry_price}")
         print(f"{'='*60}\n")
         
         symbol = convert_symbol(raw_symbol)
-        print(f"✅ Símbolo: {raw_symbol} -> {symbol}")
+        print(f"✅ Símbolo convertido: {raw_symbol} -> {symbol}")
         
         balance = get_balance()
         if balance <= 0:
-            print("❌ Balance 0")
+            print("❌ Balance es 0 o error")
             return
         
         set_leverage(symbol, LEVERAGE)
@@ -344,52 +310,53 @@ def execute_order(action, raw_symbol, entry_price):
         
         risk_params = get_risk_params(symbol, float(entry_price), atr)
         params = risk_params[action]
-        print(f"📊 SL: {params['sl']} | TP: {params['tp']}")
+        print(f"📊 SL inicial: {params['sl']} | TP: {params['tp']}")
         
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
-        print(f"💰 Cantidad: {quantity}")
+        print(f"💰 Cantidad calculada: {quantity}")
         
-        print("🚀 EJECUTANDO ORDEN...")
+        print("🚀 EJECUTANDO ORDEN DE MERCADO...")
         side = 'BUY' if action == 'LONG' else 'SELL'
         order_result = place_order(symbol, side, quantity)
         
         if order_result:
-            print("⏳ Esperando 2s...")
+            print("⏳ Esperando 2 segundos a que Bitunix registre la posición...")
             time.sleep(2)
             
             position_id = get_position_id(symbol)
             if position_id:
-                print(f"✅ Position ID: {position_id}")
-                print(f"🛡️ Colocando SL...")
-                sl_result = place_stop_loss(symbol, position_id, quantity, params['sl'])
+                print(f"✅ Position ID obtenido: {position_id}")
+                print(f"🛡️ Colocando Stop Loss inicial...")
+                sl_result = place_stop_loss(symbol, position_id, params['sl'])
                 
                 if sl_result:
-                    print(f"👁️ Iniciando monitoreo...")
-                    threading.Thread(
+                    print(f"👁️ Iniciando hilo de monitoreo BE/Trailing...")
+                    monitor_thread = threading.Thread(
                         target=monitor_position,
-                        args=(symbol, float(entry_price), action, quantity, params['sl'], position_id),
+                        args=(symbol, float(entry_price), action, params['sl'], position_id),
                         daemon=True
-                    ).start()
+                    )
+                    monitor_thread.start()
             else:
-                print(f"⚠️ No se obtuvo positionId")
+                print(f"⚠️ No se pudo obtener el positionId. El SL no se colocó automáticamente.")
         else:
-            print("❌ Orden NO ejecutada")
+            print("❌ La orden de mercado NO se ejecutó.")
         
         print(f"{'='*60}\n")
         
     except Exception as e:
-        print(f" Error: {e}")
+        print(f"❌ Error en execute_order: {e}")
         import traceback
         traceback.print_exc()
 
 def process_order(action, symbol, price):
-    print(f"\n🔔 Process: {action} {symbol} {price}")
+    print(f"\n🔔 Process order llamado: {action} {symbol} {price}")
     if not BITUNIX_API_KEY:
-        print(" Faltan API Keys")
+        print("❌ Faltan API Keys")
         return
     execute_order(action, symbol, float(price))
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # WEBHOOKS
 # ════════════════════════════════════════════════════════════════════════════
 @app.route('/', methods=['GET'])
@@ -404,12 +371,12 @@ def health():
 def webhook():
     try:
         message = request.get_data(as_text=True)
-        print(f"📨 Webhook: {message}")
+        print(f"📨 Webhook recibido: {message}")
         parts = message.split('|')
         if len(parts) >= 3:
             action, symbol, price = parts[0].strip().upper(), parts[1].strip(), parts[2].strip()
             if action in ['LONG', 'SHORT']:
-                print(f"✅ Acción: {action}")
+                print(f"✅ Acción válida: {action}")
                 threading.Thread(target=process_order, args=(action, symbol, price)).start()
                 return jsonify({'status': 'success'}), 200
         return jsonify({'status': 'error'}), 400
