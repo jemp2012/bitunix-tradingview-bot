@@ -52,7 +52,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
     
     for attempt in range(max_retries):
         try:
-            timestamp = str(int(time.time() * 1000))  # Milisegundos
+            timestamp = time.strftime('%Y%m%d%H%M%S', time.gmtime())
             nonce = secrets.token_hex(8)
             
             headers = {'Content-Type': 'application/json', 'language': 'en-US'}
@@ -66,7 +66,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
                 
                 if params:
                     sorted_params = sorted(params.items())
-                    query_string = ''.join([f"{k}={v}" for k, v in sorted_params])
+                    query_string = ''.join([f"{k}{v}" for k, v in sorted_params])
                 
                 if data:
                     body_str = json.dumps(data, separators=(',', ':'), sort_keys=True)
@@ -79,25 +79,20 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
             elif method == 'POST':
                 response = requests.post(url, data=body_str, headers=headers, timeout=10)
             
-            print(f"📡 {method} {endpoint} -> {response.status_code}")
-            
             if response.status_code == 200:
                 result = response.json()
                 if result.get('code') == 0:
                     return result
                 else:
-                    print(f"❌ Error API: {result.get('msg')}")
                     if attempt < max_retries - 1:
                         time.sleep(2)
                         continue
                     return result
             else:
-                print(f"❌ HTTP Error: {response.status_code}")
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
         except Exception as e:
-            print(f"❌ Exception: {e}")
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
@@ -118,14 +113,31 @@ def get_balance():
             return float(data.get('available', 0))
     return 0
 
-def get_account_settings():
-    """Obtiene configuración de la cuenta (modo de posición, etc.)"""
-    print("🔍 Obteniendo configuración de cuenta...")
-    result = bitunix_request('GET', '/api/v1/futures/account/get_trading_settings', auth=True)
+def get_all_trading_pairs():
+    """Obtiene todos los trading pairs disponibles"""
+    print("🔍 Obteniendo lista de trading pairs...")
+    result = bitunix_request('GET', '/api/v1/futures/market/get_trading_pairs')
     if result and result.get('code') == 0:
-        data = result.get('data', {})
-        print(f"✅ Account settings: {data}")
+        data = result.get('data', [])
+        print(f"✅ Se encontraron {len(data)} pares")
         return data
+    return []
+
+def find_symbol_format(symbol):
+    """Busca el formato correcto del símbolo"""
+    pairs = get_all_trading_pairs()
+    if not pairs:
+        return None
+    
+    # Buscar el símbolo en diferentes formatos
+    for pair in pairs:
+        pair_symbol = pair.get('symbol', '')
+        if symbol in pair_symbol or pair_symbol in symbol:
+            print(f"✅ Símbolo encontrado: {pair_symbol}")
+            print(f"   Info: {pair}")
+            return pair
+    
+    print(f"❌ Símbolo {symbol} no encontrado")
     return None
 
 def get_klines(symbol, interval='15m', limit=20):
@@ -160,67 +172,55 @@ def set_leverage(symbol, leverage):
     return result and result.get('code') == 0
 
 def place_order(symbol, side, qty):
-    """Coloca orden probando diferentes configuraciones"""
-    print(f"📤 Colocando orden {side} de {qty} {symbol}...")
+    """Coloca orden probando diferentes formatos y precisiones"""
+    print(f" Colocando orden {side} de {qty} {symbol}...")
     
-    # Obtener configuración de cuenta
-    settings = get_account_settings()
+    # Obtener info del símbolo
+    symbol_info = find_symbol_format(symbol)
     
-    # Determinar si estamos en modo Hedge
-    is_hedge = False
-    if settings and 'positionMode' in settings:
-        is_hedge = settings.get('positionMode') == 'HEDGE'
-        print(f" Position Mode: {'HEDGE' if is_hedge else 'ONE-WAY'}")
+    if symbol_info:
+        qty_precision = symbol_info.get('qtyPrecision', 3)
+        print(f"📊 Precisión de cantidad: {qty_precision}")
+        qty = round(qty, qty_precision)
+        print(f"📊 Cantidad ajustada: {qty}")
     
-    # Probar diferentes formatos
-    formats_to_try = [
-        {
-            'name': 'Formato con tradeSide',
-            'data': {
-                'symbol': symbol,
-                'qty': str(qty),
+    # Probar diferentes precisiones de cantidad
+    qty_variations = [
+        str(qty),
+        f"{qty:.3f}",
+        f"{qty:.4f}",
+        f"{qty:.2f}"
+    ]
+    
+    # Probar diferentes formatos de símbolo
+    symbol_variations = [symbol]
+    if 'USDT' in symbol and not symbol.endswith('USDT'):
+        symbol_variations.append(symbol + 'USDT')
+    
+    for sym in symbol_variations:
+        for qty_str in qty_variations:
+            print(f"\n🔄 Probando: {sym} con qty={qty_str}")
+            
+            data = {
+                'symbol': sym,
+                'qty': qty_str,
                 'side': side,
                 'tradeSide': 'OPEN',
                 'orderType': 'MARKET'
             }
-        },
-        {
-            'name': 'Formato sin tradeSide',
-            'data': {
-                'symbol': symbol,
-                'qty': str(qty),
-                'side': side,
-                'orderType': 'MARKET'
-            }
-        }
-    ]
+            
+            print(f"   Data: {data}")
+            
+            result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                                    data=data, auth=True, max_retries=1)
+            
+            if result and result.get('code') == 0:
+                print(f"✅ ¡ORDEN EJECUTADA!")
+                return result.get('data')
+            else:
+                print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
     
-    if is_hedge:
-        formats_to_try.append({
-            'name': 'Formato Hedge con positionSide',
-            'data': {
-                'symbol': symbol,
-                'qty': str(qty),
-                'side': side,
-                'positionSide': 'LONG' if side == 'BUY' else 'SHORT',
-                'orderType': 'MARKET'
-            }
-        })
-    
-    for fmt in formats_to_try:
-        print(f"\n🔄 Probando: {fmt['name']}")
-        print(f"   Data: {fmt['data']}")
-        
-        result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                                data=fmt['data'], auth=True, max_retries=1)
-        
-        if result and result.get('code') == 0:
-            print(f"✅ ¡ORDEN EJECUTADA con {fmt['name']}!")
-            return result.get('data')
-        else:
-            print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
-    
-    print(f"\n❌ Ningún formato funcionó")
+    print(f"\n❌ Ninguna combinación funcionó")
     return None
 
 def get_position_id(symbol):
@@ -266,7 +266,7 @@ def get_current_price(symbol):
 # MONITOREO
 # ═════════════════════════════════════════════════════════════════════════════
 def monitor_position(symbol, entry_price, action, initial_sl, position_id):
-    print(f"\n👁️ Monitoreo: {symbol} {action}")
+    print(f"\n️ Monitoreo: {symbol} {action}")
     
     trailing_activated = False
     be_activated = False
@@ -365,9 +365,9 @@ def execute_order(action, raw_symbol, entry_price):
         print(f"📊 SL: {params['sl']} | TP: {params['tp']}")
         
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
-        print(f" Cantidad: {quantity}")
+        print(f"💰 Cantidad: {quantity}")
         
-        print(" EJECUTANDO ORDEN...")
+        print("🚀 EJECUTANDO ORDEN...")
         side = 'BUY' if action == 'LONG' else 'SELL'
         order_result = place_order(symbol, side, quantity)
         
@@ -382,14 +382,14 @@ def execute_order(action, raw_symbol, entry_price):
                 sl_result = place_stop_loss(symbol, position_id, params['sl'])
                 
                 if sl_result:
-                    print(f"️ Iniciando monitoreo...")
+                    print(f"👁️ Iniciando monitoreo...")
                     threading.Thread(
                         target=monitor_position,
                         args=(symbol, float(entry_price), action, params['sl'], position_id),
                         daemon=True
                     ).start()
             else:
-                print(f"⚠️ No se obtuvo positionId")
+                print(f"️ No se obtuvo positionId")
         else:
             print("❌ Orden NO ejecutada")
         
