@@ -74,9 +74,6 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
                 signature = generate_signature(BITUNIX_SECRET_KEY, timestamp, nonce, BITUNIX_API_KEY, query_string, body_str)
                 headers['sign'] = signature
             
-            if attempt == 0 and data:
-                print(f" Data: {body_str}")
-            
             if method == 'GET':
                 response = requests.get(url, params=params, headers=headers, timeout=10)
             elif method == 'POST':
@@ -150,69 +147,61 @@ def set_leverage(symbol, leverage):
     }, auth=True)
     return result and result.get('code') == 0
 
-def place_order(symbol, side, qty):
-    """Prueba múltiples formatos de orden hasta encontrar el correcto"""
-    print(f"📤 Colocando orden {side} de {qty} {symbol}...")
+def get_trading_pair_info(symbol):
+    """Obtiene información del trading pair (precisión, modo, etc.)"""
+    print(f"🔍 Obteniendo info de {symbol}...")
     
-    # Formato 1: Con tradeSide OPEN (Hedge mode)
-    formats = [
-        {
-            'name': 'Formato 1: Con tradeSide OPEN',
-            'data': {
-                'symbol': symbol,
-                'qty': str(qty),
-                'side': side,
-                'tradeSide': 'OPEN',
-                'orderType': 'MARKET'
-            }
-        },
-        {
-            'name': 'Formato 2: Sin tradeSide',
-            'data': {
-                'symbol': symbol,
-                'qty': str(qty),
-                'side': side,
-                'orderType': 'MARKET'
-            }
-        },
-        {
-            'name': 'Formato 3: qty como número',
-            'data': {
-                'symbol': symbol,
-                'qty': qty,
-                'side': side,
-                'tradeSide': 'OPEN',
-                'orderType': 'MARKET'
-            }
-        },
-        {
-            'name': 'Formato 4: Con positionSide',
-            'data': {
-                'symbol': symbol,
-                'qty': str(qty),
-                'side': side,
-                'positionSide': 'LONG' if side == 'BUY' else 'SHORT',
-                'orderType': 'MARKET'
-            }
-        }
-    ]
+    # Intentar obtener todos los pares
+    result = bitunix_request('GET', '/api/v1/futures/market/get_trading_pairs')
     
-    for fmt in formats:
-        print(f"\n🔄 Probando {fmt['name']}...")
-        print(f"   Data: {fmt['data']}")
-        
-        result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                                data=fmt['data'], auth=True, max_retries=1)
-        
-        if result and result.get('code') == 0:
-            print(f"✅ ¡ORDEN EJECUTADA con {fmt['name']}!")
-            print(f"   Resultado: {result.get('data')}")
-            return result.get('data')
-        else:
-            print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
+    if result and result.get('code') == 0:
+        data = result.get('data', [])
+        if isinstance(data, list):
+            for pair in data:
+                if pair.get('symbol') == symbol:
+                    print(f"✅ Par encontrado: {pair}")
+                    return pair
+        elif isinstance(data, dict):
+            print(f"✅ Par encontrado: {data}")
+            return data
     
-    print(f"\n❌ Ningún formato funcionó")
+    print(f"️ No se encontró info de {symbol}")
     return None
+
+def place_order(symbol, side, qty):
+    """Coloca orden usando información del trading pair"""
+    print(f" Colocando orden {side} de {qty} {symbol}...")
+    
+    # Obtener info del par
+    pair_info = get_trading_pair_info(symbol)
+    
+    if pair_info:
+        # Usar precisión correcta
+        qty_precision = pair_info.get('qtyPrecision', 3)
+        qty = round(qty, qty_precision)
+        print(f"📊 Precisión de cantidad: {qty_precision} decimales")
+        print(f"📊 Cantidad ajustada: {qty}")
+    
+    # Formato básico que funcionó con ZEC
+    data = {
+        'symbol': symbol,
+        'qty': str(qty),
+        'side': side,
+        'tradeSide': 'OPEN',
+        'orderType': 'MARKET'
+    }
+    
+    print(f"📦 Data final: {data}")
+    
+    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                            data=data, auth=True, max_retries=3)
+    
+    if result and result.get('code') == 0:
+        print(f"✅ Orden ejecutada: {result.get('data')}")
+        return result.get('data')
+    else:
+        print(f"❌ Error: {result}")
+        return None
 
 def get_position_id(symbol):
     result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
@@ -225,54 +214,25 @@ def get_position_id(symbol):
     return None
 
 def place_stop_loss(symbol, position_id, qty, sl_price):
-    """Prueba múltiples formatos de SL"""
     print(f"️ Colocando SL en {sl_price} para {symbol}...")
     
-    formats = [
-        {
-            'name': 'Formato SL 1: Con slQty',
-            'data': {
-                'symbol': symbol,
-                'positionId': str(position_id),
-                'slPrice': str(round(sl_price, 4)),
-                'slStopType': 'LAST_PRICE',
-                'slQty': str(qty)
-            }
-        },
-        {
-            'name': 'Formato SL 2: Sin slQty',
-            'data': {
-                'symbol': symbol,
-                'positionId': str(position_id),
-                'slPrice': str(round(sl_price, 4)),
-                'slStopType': 'LAST_PRICE'
-            }
-        },
-        {
-            'name': 'Formato SL 3: Con slOrderType',
-            'data': {
-                'symbol': symbol,
-                'positionId': str(position_id),
-                'slPrice': str(round(sl_price, 4)),
-                'slStopType': 'LAST_PRICE',
-                'slOrderType': 'MARKET',
-                'slQty': str(qty)
-            }
-        }
-    ]
+    data = {
+        'symbol': symbol,
+        'positionId': str(position_id),
+        'slPrice': str(round(sl_price, 4)),
+        'slStopType': 'LAST_PRICE',
+        'slQty': str(qty)
+    }
     
-    for fmt in formats:
-        print(f"\n🔄 Probando {fmt['name']}...")
-        result = bitunix_request('POST', '/api/v1/futures/tpsl/place_order', 
-                                data=fmt['data'], auth=True, max_retries=1)
-        
-        if result and result.get('code') == 0:
-            print(f"✅ ¡SL colocado con {fmt['name']}!")
-            return result.get('data')
-        else:
-            print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
+    result = bitunix_request('POST', '/api/v1/futures/tpsl/place_order', 
+                            data=data, auth=True)
     
-    return None
+    if result and result.get('code') == 0:
+        print(f"✅ SL colocado: {sl_price}")
+        return result.get('data')
+    else:
+        print(f"⚠️ Error SL: {result}")
+        return None
 
 def get_current_price(symbol):
     result = bitunix_request('GET', '/api/v1/futures/market/ticker', params={'symbol': symbol})
@@ -312,7 +272,7 @@ def monitor_position(symbol, entry_price, action, qty, initial_sl, position_id):
                     lowest_price = current_price
             
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
-                print(f" BE activado! PnL: {pnl_pct:.2f}%")
+                print(f"🎯 BE activado! PnL: {pnl_pct:.2f}%")
                 place_stop_loss(symbol, position_id, qty, entry_price)
                 be_activated = True
                 trailing_activated = True
@@ -322,12 +282,12 @@ def monitor_position(symbol, entry_price, action, qty, initial_sl, position_id):
                     new_sl = highest_price * (1 - TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl > entry_price:
                         place_stop_loss(symbol, position_id, qty, new_sl)
-                        print(f"📈 Trailing SL: {new_sl:.2f}")
+                        print(f" Trailing SL: {new_sl:.2f}")
                 else:
                     new_sl = lowest_price * (1 + TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl < entry_price:
                         place_stop_loss(symbol, position_id, qty, new_sl)
-                        print(f"📉 Trailing SL: {new_sl:.2f}")
+                        print(f" Trailing SL: {new_sl:.2f}")
             
             time.sleep(TRAILING_CONFIG['check_interval'])
         except Exception as e:
@@ -394,7 +354,7 @@ def execute_order(action, raw_symbol, entry_price):
         order_result = place_order(symbol, side, quantity)
         
         if order_result:
-            print(" Esperando 2s...")
+            print("⏳ Esperando 2s...")
             time.sleep(2)
             
             position_id = get_position_id(symbol)
@@ -411,25 +371,25 @@ def execute_order(action, raw_symbol, entry_price):
                         daemon=True
                     ).start()
             else:
-                print(f"️ No se obtuvo positionId")
+                print(f"⚠️ No se obtuvo positionId")
         else:
             print("❌ Orden NO ejecutada")
         
         print(f"{'='*60}\n")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
         import traceback
         traceback.print_exc()
 
 def process_order(action, symbol, price):
     print(f"\n🔔 Process: {action} {symbol} {price}")
     if not BITUNIX_API_KEY:
-        print("❌ Faltan API Keys")
+        print(" Faltan API Keys")
         return
     execute_order(action, symbol, float(price))
 
-# ════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # WEBHOOKS
 # ════════════════════════════════════════════════════════════════════════════
 @app.route('/', methods=['GET'])
