@@ -114,7 +114,6 @@ def get_balance():
     return 0
 
 def get_all_trading_pairs():
-    """Obtiene todos los trading pairs disponibles"""
     print("🔍 Obteniendo lista de trading pairs...")
     result = bitunix_request('GET', '/api/v1/futures/market/get_trading_pairs')
     if result and result.get('code') == 0:
@@ -124,17 +123,14 @@ def get_all_trading_pairs():
     return []
 
 def find_symbol_format(symbol):
-    """Busca el formato correcto del símbolo"""
     pairs = get_all_trading_pairs()
     if not pairs:
         return None
     
-    # Buscar el símbolo en diferentes formatos
     for pair in pairs:
         pair_symbol = pair.get('symbol', '')
         if symbol in pair_symbol or pair_symbol in symbol:
             print(f"✅ Símbolo encontrado: {pair_symbol}")
-            print(f"   Info: {pair}")
             return pair
     
     print(f"❌ Símbolo {symbol} no encontrado")
@@ -172,19 +168,16 @@ def set_leverage(symbol, leverage):
     return result and result.get('code') == 0
 
 def place_order(symbol, side, qty):
-    """Coloca orden probando diferentes formatos y precisiones"""
-    print(f" Colocando orden {side} de {qty} {symbol}...")
+    print(f"📤 Colocando orden {side} de {qty} {symbol}...")
     
-    # Obtener info del símbolo
     symbol_info = find_symbol_format(symbol)
     
     if symbol_info:
         qty_precision = symbol_info.get('qtyPrecision', 3)
-        print(f"📊 Precisión de cantidad: {qty_precision}")
+        print(f" Precisión de cantidad: {qty_precision}")
         qty = round(qty, qty_precision)
         print(f"📊 Cantidad ajustada: {qty}")
     
-    # Probar diferentes precisiones de cantidad
     qty_variations = [
         str(qty),
         f"{qty:.3f}",
@@ -192,33 +185,27 @@ def place_order(symbol, side, qty):
         f"{qty:.2f}"
     ]
     
-    # Probar diferentes formatos de símbolo
-    symbol_variations = [symbol]
-    if 'USDT' in symbol and not symbol.endswith('USDT'):
-        symbol_variations.append(symbol + 'USDT')
-    
-    for sym in symbol_variations:
-        for qty_str in qty_variations:
-            print(f"\n🔄 Probando: {sym} con qty={qty_str}")
-            
-            data = {
-                'symbol': sym,
-                'qty': qty_str,
-                'side': side,
-                'tradeSide': 'OPEN',
-                'orderType': 'MARKET'
-            }
-            
-            print(f"   Data: {data}")
-            
-            result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                                    data=data, auth=True, max_retries=1)
-            
-            if result and result.get('code') == 0:
-                print(f"✅ ¡ORDEN EJECUTADA!")
-                return result.get('data')
-            else:
-                print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
+    for qty_str in qty_variations:
+        print(f"\n🔄 Probando: {symbol} con qty={qty_str}")
+        
+        data = {
+            'symbol': symbol,
+            'qty': qty_str,
+            'side': side,
+            'tradeSide': 'OPEN',
+            'orderType': 'MARKET'
+        }
+        
+        print(f"   Data: {data}")
+        
+        result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                                data=data, auth=True, max_retries=1)
+        
+        if result and result.get('code') == 0:
+            print(f"✅ ¡ORDEN EJECUTADA!")
+            return result.get('data')
+        else:
+            print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
     
     print(f"\n❌ Ninguna combinación funcionó")
     return None
@@ -234,23 +221,85 @@ def get_position_id(symbol):
     return None
 
 def place_stop_loss(symbol, position_id, sl_price):
-    print(f"🛡️ Colocando SL en {sl_price} para {symbol}...")
+    """Prueba múltiples formatos de SL"""
+    print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
     
-    data = {
-        'symbol': symbol,
-        'positionId': str(position_id),
-        'slPrice': str(round(sl_price, 4)),
-        'slStopType': 'LAST_PRICE'
-    }
+    formats = [
+        {
+            'name': 'Formato 1: Solo slPrice',
+            'data': {
+                'symbol': symbol,
+                'positionId': str(position_id),
+                'slPrice': str(round(sl_price, 2))
+            }
+        },
+        {
+            'name': 'Formato 2: Con slStopType LAST_PRICE',
+            'data': {
+                'symbol': symbol,
+                'positionId': str(position_id),
+                'slPrice': str(round(sl_price, 2)),
+                'slStopType': 'LAST_PRICE'
+            }
+        },
+        {
+            'name': 'Formato 3: Con slStopType MARK_PRICE',
+            'data': {
+                'symbol': symbol,
+                'positionId': str(position_id),
+                'slPrice': str(round(sl_price, 2)),
+                'slStopType': 'MARK_PRICE'
+            }
+        },
+        {
+            'name': 'Formato 4: Con slOrderType MARKET',
+            'data': {
+                'symbol': symbol,
+                'positionId': str(position_id),
+                'slPrice': str(round(sl_price, 2)),
+                'slStopType': 'LAST_PRICE',
+                'slOrderType': 'MARKET'
+            }
+        },
+        {
+            'name': 'Formato 5: Con slQty',
+            'data': {
+                'symbol': symbol,
+                'positionId': str(position_id),
+                'slPrice': str(round(sl_price, 2)),
+                'slStopType': 'LAST_PRICE',
+                'slQty': '0.86'
+            }
+        },
+        {
+            'name': 'Formato 6: Endpoint alternativo /tpsl/place_order',
+            'data': {
+                'symbol': symbol,
+                'positionId': str(position_id),
+                'slPrice': str(round(sl_price, 2)),
+                'slStopType': 'LAST_PRICE',
+                'slQty': '0.86'
+            },
+            'endpoint': '/api/v1/futures/tpsl/place_order'
+        }
+    ]
     
-    result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True)
+    for fmt in formats:
+        endpoint = fmt.get('endpoint', '/api/v1/futures/tpsl/position/place_order')
+        print(f"\n🔄 Probando {fmt['name']}...")
+        print(f"   Endpoint: {endpoint}")
+        print(f"   Data: {fmt['data']}")
+        
+        result = bitunix_request('POST', endpoint, data=fmt['data'], auth=True, max_retries=1)
+        
+        if result and result.get('code') == 0:
+            print(f"✅ ¡SL colocado con {fmt['name']}!")
+            return result.get('data')
+        else:
+            print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
     
-    if result and result.get('code') == 0:
-        print(f"✅ SL colocado: {sl_price}")
-        return result.get('data')
-    else:
-        print(f"⚠️ Error SL: {result}")
-        return None
+    print(f"\n❌ Ningún formato de SL funcionó")
+    return None
 
 def get_current_price(symbol):
     result = bitunix_request('GET', '/api/v1/futures/market/ticker', params={'symbol': symbol})
@@ -266,7 +315,7 @@ def get_current_price(symbol):
 # MONITOREO
 # ═════════════════════════════════════════════════════════════════════════════
 def monitor_position(symbol, entry_price, action, initial_sl, position_id):
-    print(f"\n️ Monitoreo: {symbol} {action}")
+    print(f"\n👁️ Monitoreo: {symbol} {action}")
     
     trailing_activated = False
     be_activated = False
@@ -314,7 +363,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
 
 # ════════════════════════════════════════════════════════════════════════════
 # TRADING
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 def convert_symbol(symbol):
     if '.P' in symbol:
         return symbol.replace('.P', '')
@@ -389,7 +438,7 @@ def execute_order(action, raw_symbol, entry_price):
                         daemon=True
                     ).start()
             else:
-                print(f"️ No se obtuvo positionId")
+                print(f"⚠️ No se obtuvo positionId")
         else:
             print("❌ Orden NO ejecutada")
         
@@ -401,7 +450,7 @@ def execute_order(action, raw_symbol, entry_price):
         traceback.print_exc()
 
 def process_order(action, symbol, price):
-    print(f"\n🔔 Process: {action} {symbol} {price}")
+    print(f"\n Process: {action} {symbol} {price}")
     if not BITUNIX_API_KEY:
         print("❌ Faltan API Keys")
         return
