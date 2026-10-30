@@ -15,8 +15,8 @@ app = Flask(__name__)
 BITUNIX_API_KEY = os.environ.get('BITUNIX_API_KEY', '')
 BITUNIX_SECRET_KEY = os.environ.get('BITUNIX_SECRET_KEY', '')
 
-POSITION_SIZE_PERCENT = 1.0  # 1% del balance
-LEVERAGE = 5                 # 5x apalancamiento
+POSITION_SIZE_PERCENT = 1.0
+LEVERAGE = 5
 
 BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
@@ -26,17 +26,18 @@ RISK_CONFIG = {
     'AVAX': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'BCH': {'sl_atr_mult': 1.8, 'tp_rr': 2.0},
     'AAVE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'ARB': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'default': {'sl_atr_mult': 1.8, 'tp_rr': 2.0}
 }
 
 TRAILING_CONFIG = {
-    'activation_pct': 1.0,   # Activar BE/Trailing al 1% de ganancia
-    'trail_pct': 0.5,        # Distancia del trailing stop (0.5%)
-    'check_interval': 10     # Verificar cada 10 segundos
+    'activation_pct': 1.0,
+    'trail_pct': 0.5,
+    'check_interval': 10
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# AUTENTICACIÓN (SHA256 DOBLE)
+# AUTENTICACIÓN
 # ═════════════════════════════════════════════════════════════════════════════
 def sha256_hex(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -168,7 +169,6 @@ def set_leverage(symbol, leverage):
     return result and result.get('code') == 0
 
 def place_order(symbol, side, qty):
-    """Coloca orden de mercado probando diferentes precisiones de cantidad"""
     print(f"📤 Colocando orden {side} de {qty} {symbol}...")
     
     symbol_info = find_symbol_format(symbol)
@@ -221,13 +221,52 @@ def get_position_id(symbol):
                     return pos.get('positionId')
     return None
 
+def get_pending_tpsl_orders(symbol, position_id):
+    """Obtiene las órdenes TP/SL pendientes para una posición"""
+    print(f"🔍 Buscando órdenes TP/SL pendientes para {symbol}...")
+    result = bitunix_request('GET', '/api/v1/futures/tpsl/get_pending_orders', 
+                            params={'symbol': symbol}, auth=True)
+    
+    if result and result.get('code') == 0:
+        data = result.get('data', [])
+        if isinstance(data, list):
+            for order in data:
+                if str(order.get('positionId')) == str(position_id):
+                    print(f"✅ Orden TP/SL encontrada: {order}")
+                    return order
+    return None
+
+def cancel_tpsl_order(symbol, order_id):
+    """Cancela una orden TP/SL existente"""
+    print(f"🗑️ Cancelando orden TP/SL {order_id}...")
+    result = bitunix_request('POST', '/api/v1/futures/tpsl/cancel_order', data={
+        'symbol': symbol,
+        'orderId': str(order_id)
+    }, auth=True)
+    
+    if result and result.get('code') == 0:
+        print(f"✅ Orden TP/SL cancelada exitosamente")
+        return True
+    else:
+        print(f"⚠️ Error cancelando orden: {result}")
+        return False
+
 def place_stop_loss(symbol, position_id, sl_price):
     """
-    Coloca Stop Loss usando el formato confirmado que funciona.
-    Solo envía: symbol, positionId, slPrice
+    Coloca Stop Loss: primero cancela el SL existente, luego coloca el nuevo.
     """
     print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
     
+    # Paso 1: Buscar y cancelar SL existente
+    existing_order = get_pending_tpsl_orders(symbol, position_id)
+    if existing_order:
+        order_id = existing_order.get('orderId')
+        if order_id:
+            print(f"🗑️ SL existente encontrado (ID: {order_id}), cancelando...")
+            cancel_tpsl_order(symbol, order_id)
+            time.sleep(1)  # Esperar a que se procese la cancelación
+    
+    # Paso 2: Colocar nuevo SL
     data = {
         'symbol': symbol,
         'positionId': str(position_id),
@@ -269,6 +308,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
         try:
             current_price = get_current_price(symbol)
             if not current_price:
+                print(f"⚠️ No se pudo obtener precio de {symbol}")
                 time.sleep(TRAILING_CONFIG['check_interval'])
                 continue
             
@@ -281,29 +321,39 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
                 if current_price < lowest_price:
                     lowest_price = current_price
             
+            print(f"📊 Precio actual: {current_price} | PnL: {pnl_pct:.2f}%")
+            
             # Activar Break Even al 1%
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
                 print(f"🎯 ¡BE activado! PnL: {pnl_pct:.2f}%")
-                place_stop_loss(symbol, position_id, entry_price)
-                be_activated = True
-                trailing_activated = True
+                sl_result = place_stop_loss(symbol, position_id, entry_price)
+                if sl_result:
+                    be_activated = True
+                    trailing_activated = True
+                    print(f"✅ BE colocado en {entry_price}")
+                else:
+                    print(f"⚠️ No se pudo colocar BE, reintentando en próximo ciclo...")
             
             # Trailing Stop después de activar BE
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl > entry_price:
-                        place_stop_loss(symbol, position_id, new_sl)
-                        print(f"📈 Trailing SL actualizado: {new_sl:.2f} (Highest: {highest_price:.2f})")
+                        sl_result = place_stop_loss(symbol, position_id, new_sl)
+                        if sl_result:
+                            print(f"📈 Trailing SL actualizado: {new_sl:.2f} (Highest: {highest_price:.2f})")
                 else:
                     new_sl = lowest_price * (1 + TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl < entry_price:
-                        place_stop_loss(symbol, position_id, new_sl)
-                        print(f"📉 Trailing SL actualizado: {new_sl:.2f} (Lowest: {lowest_price:.2f})")
+                        sl_result = place_stop_loss(symbol, position_id, new_sl)
+                        if sl_result:
+                            print(f"📉 Trailing SL actualizado: {new_sl:.2f} (Lowest: {lowest_price:.2f})")
             
             time.sleep(TRAILING_CONFIG['check_interval'])
         except Exception as e:
             print(f"⚠️ Error en monitoreo: {e}")
+            import traceback
+            traceback.print_exc()
             time.sleep(TRAILING_CONFIG['check_interval'])
 
 # ════════════════════════════════════════════════════════════════════════════
