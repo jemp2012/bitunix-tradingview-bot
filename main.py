@@ -28,6 +28,7 @@ RISK_CONFIG = {
     'AAVE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'ARB': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'LDO': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
+    'ENS': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'default': {'sl_atr_mult': 1.8, 'tp_rr': 2.0}
 }
 
@@ -115,6 +116,31 @@ def get_balance():
             return float(data.get('available', 0))
     return 0
 
+def get_symbol_info(symbol):
+    """Obtiene información del símbolo incluyendo límites de cantidad"""
+    print(f"🔍 Obteniendo info de {symbol}...")
+    
+    # Intentar con diferentes formatos
+    symbol_variations = [
+        symbol,
+        symbol.replace('USDT', '-USDT'),
+        symbol.replace('USDT', '_USDT'),
+    ]
+    
+    for sym in symbol_variations:
+        result = bitunix_request('GET', '/api/v1/futures/market/get_trading_pairs')
+        if result and result.get('code') == 0:
+            data = result.get('data', [])
+            if isinstance(data, list):
+                for pair in data:
+                    if pair.get('symbol') == sym:
+                        print(f"✅ Símbolo encontrado: {sym}")
+                        print(f"   Límites: minQty={pair.get('minQty')}, maxQty={pair.get('maxQty')}, qtyPrecision={pair.get('qtyPrecision')}")
+                        return pair
+    
+    print(f"❌ Símbolo {symbol} no encontrado")
+    return None
+
 def get_klines(symbol, interval='15m', limit=20):
     result = bitunix_request('GET', '/api/v1/futures/market/kline', params={
         'symbol': symbol, 'interval': interval, 'limit': limit
@@ -146,61 +172,68 @@ def set_leverage(symbol, leverage):
     }, auth=True)
     return result and result.get('code') == 0
 
-def try_place_order(symbol, side, qty_str):
-    """Intenta colocar una orden con un símbolo y cantidad específicos"""
-    data = {
-        'symbol': symbol,
-        'qty': qty_str,
-        'side': side,
-        'tradeSide': 'OPEN',
-        'orderType': 'MARKET'
-    }
-    
-    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                            data=data, auth=True, max_retries=1)
-    
-    if result and result.get('code') == 0:
-        return result.get('data')
-    return None
-
-def place_order(symbol, side, qty):
-    """Prueba múltiples formatos de símbolo y cantidad"""
+def place_order(symbol, side, qty, symbol_info=None):
+    """Coloca orden respetando los límites del par"""
     print(f"📤 Colocando orden {side} de {qty} {symbol}...")
     
-    # Formatos de símbolo a probar
+    # Si tenemos info del símbolo, ajustar cantidad a los límites
+    if symbol_info:
+        min_qty = float(symbol_info.get('minQty', 0))
+        max_qty = float(symbol_info.get('maxQty', 999999))
+        qty_precision = int(symbol_info.get('qtyPrecision', 3))
+        
+        print(f"📊 Límites del par: min={min_qty}, max={max_qty}, precisión={qty_precision}")
+        
+        # Ajustar cantidad si excede límites
+        if qty > max_qty:
+            print(f"⚠️ Cantidad {qty} excede máximo {max_qty}, ajustando...")
+            qty = max_qty
+        elif qty < min_qty:
+            print(f"⚠️ Cantidad {qty} es menor que mínimo {min_qty}, ajustando...")
+            qty = min_qty
+        
+        qty = round(qty, qty_precision)
+        print(f"📊 Cantidad final ajustada: {qty}")
+    
+    # Probar diferentes formatos de símbolo
     symbol_variations = [
-        symbol,                          # AAVEUSDT
-        symbol.replace('USDT', '-USDT'), # AAVE-USDT
-        symbol.replace('USDT', '_USDT'), # AAVE_USDT
+        symbol,
+        symbol.replace('USDT', '-USDT'),
+        symbol.replace('USDT', '_USDT'),
     ]
     
-    # Variaciones de cantidad
     qty_variations = [
         str(qty),
         f"{qty:.2f}",
         f"{qty:.3f}",
-        f"{qty:.4f}",
     ]
-    
-    print(f"🔍 Probando {len(symbol_variations)} formatos de símbolo x {len(qty_variations)} cantidades...")
     
     for sym in symbol_variations:
         for qty_str in qty_variations:
             print(f"\n🔄 Probando: {sym} con qty={qty_str}")
             
-            result = try_place_order(sym, side, qty_str)
+            data = {
+                'symbol': sym,
+                'qty': qty_str,
+                'side': side,
+                'tradeSide': 'OPEN',
+                'orderType': 'MARKET'
+            }
             
-            if result:
-                print(f"✅ ¡ORDEN EJECUTADA con símbolo {sym} y qty={qty_str}!")
-                return result
+            result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                                    data=data, auth=True, max_retries=1)
+            
+            if result and result.get('code') == 0:
+                print(f"✅ ¡ORDEN EJECUTADA con {sym} qty={qty_str}!")
+                return result.get('data'), sym
             else:
-                print(f"   ❌ Error")
+                error_msg = result.get('msg', 'Unknown') if result else 'Sin respuesta'
+                print(f"   ❌ Error: {error_msg}")
     
     print(f"\n❌ Ninguna combinación funcionó")
-    return None
+    return None, None
 
 def get_position_id(symbol):
-    # Probar múltiples formatos de símbolo
     symbol_variations = [
         symbol,
         symbol.replace('USDT', '-USDT'),
@@ -234,13 +267,10 @@ def cancel_tpsl_order(symbol, order_id):
         'symbol': symbol,
         'orderId': str(order_id)
     }, auth=True)
-    
-    if result and result.get('code') == 0:
-        return True
-    return False
+    return result and result.get('code') == 0
 
 def place_stop_loss(symbol, position_id, sl_price):
-    print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
+    print(f"🛡️ Colocando SL en {sl_price} para {symbol}...")
     
     existing_order = get_pending_tpsl_orders(symbol, position_id)
     if existing_order:
@@ -258,7 +288,7 @@ def place_stop_loss(symbol, position_id, sl_price):
     result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"✅ Stop Loss colocado: {sl_price}")
+        print(f"✅ SL colocado: {sl_price}")
         return result.get('data')
     else:
         print(f"⚠️ Error SL: {result}")
@@ -305,10 +335,9 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
             
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
                 print(f"🎯 BE activado! PnL: {pnl_pct:.2f}%")
-                sl_result = place_stop_loss(symbol, position_id, entry_price)
-                if sl_result:
-                    be_activated = True
-                    trailing_activated = True
+                place_stop_loss(symbol, position_id, entry_price)
+                be_activated = True
+                trailing_activated = True
             
             if trailing_activated:
                 if action == 'LONG':
@@ -368,6 +397,9 @@ def execute_order(action, raw_symbol, entry_price):
             print("❌ Balance 0")
             return
         
+        # Obtener info del símbolo ANTES de calcular cantidad
+        symbol_info = get_symbol_info(symbol)
+        
         set_leverage(symbol, LEVERAGE)
         
         klines = get_klines(symbol, '15m', 20)
@@ -378,25 +410,25 @@ def execute_order(action, raw_symbol, entry_price):
         print(f"📊 SL: {params['sl']} | TP: {params['tp']}")
         
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
-        print(f"💰 Cantidad: {quantity}")
+        print(f"💰 Cantidad calculada: {quantity}")
         
         print("🚀 EJECUTANDO ORDEN...")
         side = 'BUY' if action == 'LONG' else 'SELL'
-        order_result = place_order(symbol, side, quantity)
+        order_result, used_symbol = place_order(symbol, side, quantity, symbol_info)
         
         if order_result:
             print("⏳ Esperando 2s...")
             time.sleep(2)
             
-            position_id = get_position_id(symbol)
+            position_id = get_position_id(used_symbol or symbol)
             if position_id:
                 print(f"✅ Position ID: {position_id}")
-                sl_result = place_stop_loss(symbol, position_id, params['sl'])
+                sl_result = place_stop_loss(used_symbol or symbol, position_id, params['sl'])
                 
                 if sl_result:
                     threading.Thread(
                         target=monitor_position,
-                        args=(symbol, float(entry_price), action, params['sl'], position_id),
+                        args=(used_symbol or symbol, float(entry_price), action, params['sl'], position_id),
                         daemon=True
                     ).start()
         else:
