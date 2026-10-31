@@ -27,6 +27,7 @@ RISK_CONFIG = {
     'BCH': {'sl_atr_mult': 1.8, 'tp_rr': 2.0},
     'AAVE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'ARB': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
+    'LDO': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'default': {'sl_atr_mult': 1.8, 'tp_rr': 2.0}
 }
 
@@ -101,7 +102,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
 
 # ════════════════════════════════════════════════════════════════════════════
 # FUNCIONES DE BITUNIX
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 def get_balance():
     result = bitunix_request('GET', '/api/v1/futures/account', auth=True)
     if result and result.get('code') == 0:
@@ -113,29 +114,6 @@ def get_balance():
         elif isinstance(data, dict):
             return float(data.get('available', 0))
     return 0
-
-def get_all_trading_pairs():
-    print("🔍 Obteniendo lista de trading pairs...")
-    result = bitunix_request('GET', '/api/v1/futures/market/get_trading_pairs')
-    if result and result.get('code') == 0:
-        data = result.get('data', [])
-        print(f"✅ Se encontraron {len(data)} pares")
-        return data
-    return []
-
-def find_symbol_format(symbol):
-    pairs = get_all_trading_pairs()
-    if not pairs:
-        return None
-    
-    for pair in pairs:
-        pair_symbol = pair.get('symbol', '')
-        if symbol in pair_symbol or pair_symbol in symbol:
-            print(f"✅ Símbolo encontrado: {pair_symbol}")
-            return pair
-    
-    print(f"❌ Símbolo {symbol} no encontrado")
-    return None
 
 def get_klines(symbol, interval='15m', limit=20):
     result = bitunix_request('GET', '/api/v1/futures/market/kline', params={
@@ -168,62 +146,78 @@ def set_leverage(symbol, leverage):
     }, auth=True)
     return result and result.get('code') == 0
 
+def try_place_order(symbol, side, qty_str):
+    """Intenta colocar una orden con un símbolo y cantidad específicos"""
+    data = {
+        'symbol': symbol,
+        'qty': qty_str,
+        'side': side,
+        'tradeSide': 'OPEN',
+        'orderType': 'MARKET'
+    }
+    
+    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                            data=data, auth=True, max_retries=1)
+    
+    if result and result.get('code') == 0:
+        return result.get('data')
+    return None
+
 def place_order(symbol, side, qty):
+    """Prueba múltiples formatos de símbolo y cantidad"""
     print(f"📤 Colocando orden {side} de {qty} {symbol}...")
     
-    symbol_info = find_symbol_format(symbol)
-    
-    if symbol_info:
-        qty_precision = symbol_info.get('qtyPrecision', 3)
-        print(f"📊 Precisión de cantidad: {qty_precision}")
-        qty = round(qty, qty_precision)
-        print(f"📊 Cantidad ajustada: {qty}")
-    
-    qty_variations = [
-        str(qty),
-        f"{qty:.3f}",
-        f"{qty:.4f}",
-        f"{qty:.2f}"
+    # Formatos de símbolo a probar
+    symbol_variations = [
+        symbol,                          # AAVEUSDT
+        symbol.replace('USDT', '-USDT'), # AAVE-USDT
+        symbol.replace('USDT', '_USDT'), # AAVE_USDT
     ]
     
-    for qty_str in qty_variations:
-        print(f"\n🔄 Probando: {symbol} con qty={qty_str}")
-        
-        data = {
-            'symbol': symbol,
-            'qty': qty_str,
-            'side': side,
-            'tradeSide': 'OPEN',
-            'orderType': 'MARKET'
-        }
-        
-        print(f"   Data: {data}")
-        
-        result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                                data=data, auth=True, max_retries=1)
-        
-        if result and result.get('code') == 0:
-            print(f"✅ ¡ORDEN EJECUTADA!")
-            return result.get('data')
-        else:
-            print(f"   ❌ Error: {result.get('msg') if result else 'Sin respuesta'}")
+    # Variaciones de cantidad
+    qty_variations = [
+        str(qty),
+        f"{qty:.2f}",
+        f"{qty:.3f}",
+        f"{qty:.4f}",
+    ]
+    
+    print(f"🔍 Probando {len(symbol_variations)} formatos de símbolo x {len(qty_variations)} cantidades...")
+    
+    for sym in symbol_variations:
+        for qty_str in qty_variations:
+            print(f"\n🔄 Probando: {sym} con qty={qty_str}")
+            
+            result = try_place_order(sym, side, qty_str)
+            
+            if result:
+                print(f"✅ ¡ORDEN EJECUTADA con símbolo {sym} y qty={qty_str}!")
+                return result
+            else:
+                print(f"   ❌ Error")
     
     print(f"\n❌ Ninguna combinación funcionó")
     return None
 
 def get_position_id(symbol):
-    result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
-    if result and result.get('code') == 0:
-        data = result.get('data', [])
-        if isinstance(data, list):
-            for pos in data:
-                if pos.get('symbol') == symbol:
-                    return pos.get('positionId')
+    # Probar múltiples formatos de símbolo
+    symbol_variations = [
+        symbol,
+        symbol.replace('USDT', '-USDT'),
+        symbol.replace('USDT', '_USDT'),
+    ]
+    
+    for sym in symbol_variations:
+        result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
+        if result and result.get('code') == 0:
+            data = result.get('data', [])
+            if isinstance(data, list):
+                for pos in data:
+                    if pos.get('symbol') == sym:
+                        return pos.get('positionId')
     return None
 
 def get_pending_tpsl_orders(symbol, position_id):
-    """Obtiene las órdenes TP/SL pendientes para una posición"""
-    print(f"🔍 Buscando órdenes TP/SL pendientes para {symbol}...")
     result = bitunix_request('GET', '/api/v1/futures/tpsl/get_pending_orders', 
                             params={'symbol': symbol}, auth=True)
     
@@ -232,41 +226,29 @@ def get_pending_tpsl_orders(symbol, position_id):
         if isinstance(data, list):
             for order in data:
                 if str(order.get('positionId')) == str(position_id):
-                    print(f"✅ Orden TP/SL encontrada: {order}")
                     return order
     return None
 
 def cancel_tpsl_order(symbol, order_id):
-    """Cancela una orden TP/SL existente"""
-    print(f"🗑️ Cancelando orden TP/SL {order_id}...")
     result = bitunix_request('POST', '/api/v1/futures/tpsl/cancel_order', data={
         'symbol': symbol,
         'orderId': str(order_id)
     }, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"✅ Orden TP/SL cancelada exitosamente")
         return True
-    else:
-        print(f"⚠️ Error cancelando orden: {result}")
-        return False
+    return False
 
 def place_stop_loss(symbol, position_id, sl_price):
-    """
-    Coloca Stop Loss: primero cancela el SL existente, luego coloca el nuevo.
-    """
     print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
     
-    # Paso 1: Buscar y cancelar SL existente
     existing_order = get_pending_tpsl_orders(symbol, position_id)
     if existing_order:
         order_id = existing_order.get('orderId')
         if order_id:
-            print(f"🗑️ SL existente encontrado (ID: {order_id}), cancelando...")
             cancel_tpsl_order(symbol, order_id)
-            time.sleep(1)  # Esperar a que se procese la cancelación
+            time.sleep(1)
     
-    # Paso 2: Colocar nuevo SL
     data = {
         'symbol': symbol,
         'positionId': str(position_id),
@@ -276,10 +258,10 @@ def place_stop_loss(symbol, position_id, sl_price):
     result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"✅ Stop Loss colocado exitosamente: {sl_price}")
+        print(f"✅ Stop Loss colocado: {sl_price}")
         return result.get('data')
     else:
-        print(f"⚠️ Error colocando SL: {result}")
+        print(f"⚠️ Error SL: {result}")
         return None
 
 def get_current_price(symbol):
@@ -293,11 +275,10 @@ def get_current_price(symbol):
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
-# MONITOREO (BE + TRAILING STOP)
+# MONITOREO
 # ═════════════════════════════════════════════════════════════════════════════
 def monitor_position(symbol, entry_price, action, initial_sl, position_id):
-    print(f"\n👁️ Monitoreo iniciado: {symbol} {action}")
-    print(f"   Entry: {entry_price} | SL inicial: {initial_sl}")
+    print(f"\n👁️ Monitoreo: {symbol} {action}")
     
     trailing_activated = False
     be_activated = False
@@ -308,7 +289,6 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
         try:
             current_price = get_current_price(symbol)
             if not current_price:
-                print(f"⚠️ No se pudo obtener precio de {symbol}")
                 time.sleep(TRAILING_CONFIG['check_interval'])
                 continue
             
@@ -321,43 +301,32 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
                 if current_price < lowest_price:
                     lowest_price = current_price
             
-            print(f"📊 Precio actual: {current_price} | PnL: {pnl_pct:.2f}%")
+            print(f"📊 Precio: {current_price} | PnL: {pnl_pct:.2f}%")
             
-            # Activar Break Even al 1%
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
-                print(f"🎯 ¡BE activado! PnL: {pnl_pct:.2f}%")
+                print(f"🎯 BE activado! PnL: {pnl_pct:.2f}%")
                 sl_result = place_stop_loss(symbol, position_id, entry_price)
                 if sl_result:
                     be_activated = True
                     trailing_activated = True
-                    print(f"✅ BE colocado en {entry_price}")
-                else:
-                    print(f"⚠️ No se pudo colocar BE, reintentando en próximo ciclo...")
             
-            # Trailing Stop después de activar BE
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl > entry_price:
-                        sl_result = place_stop_loss(symbol, position_id, new_sl)
-                        if sl_result:
-                            print(f"📈 Trailing SL actualizado: {new_sl:.2f} (Highest: {highest_price:.2f})")
+                        place_stop_loss(symbol, position_id, new_sl)
                 else:
                     new_sl = lowest_price * (1 + TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl < entry_price:
-                        sl_result = place_stop_loss(symbol, position_id, new_sl)
-                        if sl_result:
-                            print(f"📉 Trailing SL actualizado: {new_sl:.2f} (Lowest: {lowest_price:.2f})")
+                        place_stop_loss(symbol, position_id, new_sl)
             
             time.sleep(TRAILING_CONFIG['check_interval'])
         except Exception as e:
-            print(f"⚠️ Error en monitoreo: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"⚠️ Error monitoreo: {e}")
             time.sleep(TRAILING_CONFIG['check_interval'])
 
 # ════════════════════════════════════════════════════════════════════════════
-# LÓGICA DE TRADING
+# TRADING
 # ═════════════════════════════════════════════════════════════════════════════
 def convert_symbol(symbol):
     if '.P' in symbol:
@@ -396,7 +365,7 @@ def execute_order(action, raw_symbol, entry_price):
         
         balance = get_balance()
         if balance <= 0:
-            print("❌ Balance es 0 o error")
+            print("❌ Balance 0")
             return
         
         set_leverage(symbol, LEVERAGE)
@@ -406,47 +375,40 @@ def execute_order(action, raw_symbol, entry_price):
         
         risk_params = get_risk_params(symbol, float(entry_price), atr)
         params = risk_params[action]
-        print(f"📊 SL inicial: {params['sl']} | TP: {params['tp']}")
+        print(f"📊 SL: {params['sl']} | TP: {params['tp']}")
         
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
-        print(f"💰 Cantidad calculada: {quantity}")
+        print(f"💰 Cantidad: {quantity}")
         
-        print("🚀 EJECUTANDO ORDEN DE MERCADO...")
+        print("🚀 EJECUTANDO ORDEN...")
         side = 'BUY' if action == 'LONG' else 'SELL'
         order_result = place_order(symbol, side, quantity)
         
         if order_result:
-            print("⏳ Esperando 2 segundos a que Bitunix registre la posición...")
+            print("⏳ Esperando 2s...")
             time.sleep(2)
             
             position_id = get_position_id(symbol)
             if position_id:
-                print(f"✅ Position ID obtenido: {position_id}")
-                print(f"🛡️ Colocando Stop Loss inicial...")
+                print(f"✅ Position ID: {position_id}")
                 sl_result = place_stop_loss(symbol, position_id, params['sl'])
                 
                 if sl_result:
-                    print(f"👁️ Iniciando hilo de monitoreo BE/Trailing...")
-                    monitor_thread = threading.Thread(
+                    threading.Thread(
                         target=monitor_position,
                         args=(symbol, float(entry_price), action, params['sl'], position_id),
                         daemon=True
-                    )
-                    monitor_thread.start()
-            else:
-                print(f"⚠️ No se pudo obtener el positionId. El SL no se colocó automáticamente.")
+                    ).start()
         else:
-            print("❌ La orden de mercado NO se ejecutó.")
+            print("❌ Orden NO ejecutada")
         
         print(f"{'='*60}\n")
         
     except Exception as e:
-        print(f"❌ Error en execute_order: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Error: {e}")
 
 def process_order(action, symbol, price):
-    print(f"\n🔔 Process order llamado: {action} {symbol} {price}")
+    print(f"\n🔔 Process: {action} {symbol} {price}")
     if not BITUNIX_API_KEY:
         print("❌ Faltan API Keys")
         return
@@ -467,12 +429,12 @@ def health():
 def webhook():
     try:
         message = request.get_data(as_text=True)
-        print(f"📨 Webhook recibido: {message}")
+        print(f"📨 Webhook: {message}")
         parts = message.split('|')
         if len(parts) >= 3:
             action, symbol, price = parts[0].strip().upper(), parts[1].strip(), parts[2].strip()
             if action in ['LONG', 'SHORT']:
-                print(f"✅ Acción válida: {action}")
+                print(f"✅ Acción: {action}")
                 threading.Thread(target=process_order, args=(action, symbol, price)).start()
                 return jsonify({'status': 'success'}), 200
         return jsonify({'status': 'error'}), 400
