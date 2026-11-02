@@ -227,13 +227,80 @@ def place_stop_loss(symbol, position_id, sl_price):
         return None
 
 def get_current_price(symbol):
-    result = bitunix_request('GET', '/api/v1/futures/market/ticker', params={'symbol': symbol})
-    if result and result.get('code') == 0:
-        data = result.get('data', {})
-        if isinstance(data, list) and len(data) > 0:
-            return float(data[0].get('lastPrice', 0))
-        elif isinstance(data, dict):
-            return float(data.get('lastPrice', 0))
+    """Obtiene el precio actual probando múltiples endpoints"""
+    
+    # Lista de endpoints a probar (en orden de preferencia)
+    endpoints_to_try = [
+        {
+            'name': 'Ticker endpoint',
+            'method': 'GET',
+            'endpoint': '/api/v1/futures/market/ticker',
+            'params': {'symbol': symbol}
+        },
+        {
+            'name': 'Price endpoint',
+            'method': 'GET',
+            'endpoint': '/api/v1/futures/market/price',
+            'params': {'symbol': symbol}
+        },
+        {
+            'name': 'Kline endpoint (última vela)',
+            'method': 'GET',
+            'endpoint': '/api/v1/futures/market/kline',
+            'params': {'symbol': symbol, 'interval': '1m', 'limit': 1}
+        },
+        {
+            'name': 'Trades endpoint',
+            'method': 'GET',
+            'endpoint': '/api/v1/futures/market/trades',
+            'params': {'symbol': symbol, 'limit': 1}
+        }
+    ]
+    
+    # También probar formatos alternativos del símbolo
+    symbol_variations = [
+        symbol,
+        symbol.replace('USDT', '-USDT'),
+        symbol.replace('USDT', '_USDT'),
+    ]
+    
+    for sym in symbol_variations:
+        for ep_info in endpoints_to_try:
+            try:
+                result = bitunix_request(
+                    ep_info['method'],
+                    ep_info['endpoint'],
+                    params=ep_info['params'] if 'params' in ep_info else None,
+                    auth=False,
+                    max_retries=1
+                )
+                
+                if result and result.get('code') == 0:
+                    data = result.get('data', {})
+                    
+                    # Extraer precio según el formato de respuesta
+                    price = None
+                    
+                    if isinstance(data, list) and len(data) > 0:
+                        item = data[0]
+                        # Formato ticker: {lastPrice: xxx}
+                        price = item.get('lastPrice') or item.get('price') or item.get('close')
+                        # Formato kline: [time, open, high, low, close, volume]
+                        if price is None and isinstance(item, list) and len(item) >= 5:
+                            price = item[4]
+                    elif isinstance(data, dict):
+                        price = data.get('lastPrice') or data.get('price') or data.get('close')
+                    
+                    if price is not None:
+                        price = float(price)
+                        print(f"✅ Precio obtenido ({ep_info['name']}, símbolo {sym}): {price}")
+                        return price
+                        
+            except Exception as e:
+                print(f"⚠️ Error con {ep_info['name']} ({sym}): {e}")
+                continue
+    
+    print(f"❌ No se pudo obtener precio de {symbol} con ningún endpoint")
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
