@@ -227,80 +227,36 @@ def place_stop_loss(symbol, position_id, sl_price):
         return None
 
 def get_current_price(symbol):
-    """Obtiene el precio actual probando múltiples endpoints"""
+    """Obtiene el precio actual - versión optimizada"""
     
-    # Lista de endpoints a probar (en orden de preferencia)
+    # Solo probar el formato original primero (el que ya sabemos que funciona)
     endpoints_to_try = [
-        {
-            'name': 'Ticker endpoint',
-            'method': 'GET',
-            'endpoint': '/api/v1/futures/market/ticker',
-            'params': {'symbol': symbol}
-        },
-        {
-            'name': 'Price endpoint',
-            'method': 'GET',
-            'endpoint': '/api/v1/futures/market/price',
-            'params': {'symbol': symbol}
-        },
-        {
-            'name': 'Kline endpoint (última vela)',
-            'method': 'GET',
-            'endpoint': '/api/v1/futures/market/kline',
-            'params': {'symbol': symbol, 'interval': '1m', 'limit': 1}
-        },
-        {
-            'name': 'Trades endpoint',
-            'method': 'GET',
-            'endpoint': '/api/v1/futures/market/trades',
-            'params': {'symbol': symbol, 'limit': 1}
-        }
+        ('/api/v1/futures/market/kline', {'symbol': symbol, 'interval': '1m', 'limit': 1}),
+        ('/api/v1/futures/market/ticker', {'symbol': symbol}),
     ]
     
-    # También probar formatos alternativos del símbolo
-    symbol_variations = [
-        symbol,
-        symbol.replace('USDT', '-USDT'),
-        symbol.replace('USDT', '_USDT'),
-    ]
-    
-    for sym in symbol_variations:
-        for ep_info in endpoints_to_try:
-            try:
-                result = bitunix_request(
-                    ep_info['method'],
-                    ep_info['endpoint'],
-                    params=ep_info['params'] if 'params' in ep_info else None,
-                    auth=False,
-                    max_retries=1
-                )
+    for endpoint, params in endpoints_to_try:
+        try:
+            result = bitunix_request('GET', endpoint, params=params, auth=False, max_retries=1)
+            
+            if result and result.get('code') == 0:
+                data = result.get('data', {})
+                price = None
                 
-                if result and result.get('code') == 0:
-                    data = result.get('data', {})
+                if isinstance(data, list) and len(data) > 0:
+                    item = data[0]
+                    price = item.get('lastPrice') or item.get('price') or item.get('close')
+                    if price is None and isinstance(item, list) and len(item) >= 5:
+                        price = item[4]
+                elif isinstance(data, dict):
+                    price = data.get('lastPrice') or data.get('price') or data.get('close')
+                
+                if price is not None:
+                    return float(price)
                     
-                    # Extraer precio según el formato de respuesta
-                    price = None
-                    
-                    if isinstance(data, list) and len(data) > 0:
-                        item = data[0]
-                        # Formato ticker: {lastPrice: xxx}
-                        price = item.get('lastPrice') or item.get('price') or item.get('close')
-                        # Formato kline: [time, open, high, low, close, volume]
-                        if price is None and isinstance(item, list) and len(item) >= 5:
-                            price = item[4]
-                    elif isinstance(data, dict):
-                        price = data.get('lastPrice') or data.get('price') or data.get('close')
-                    
-                    if price is not None:
-                        price = float(price)
-                        print(f"✅ Precio obtenido ({ep_info['name']}, símbolo {sym}): {price}")
-                        return price
-                        
-            except Exception as e:
-                print(f"⚠️ Error con {ep_info['name']} ({sym}): {e}")
-                continue
+        except Exception as e:
+            continue
     
-    print(f"❌ No se pudo obtener precio de {symbol} con ningún endpoint")
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
