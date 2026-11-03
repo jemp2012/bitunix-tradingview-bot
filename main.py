@@ -37,6 +37,13 @@ TRAILING_CONFIG = {
     'trail_pct': 0.5,
     'check_interval': 10
 }
+# ════════════════════════════════════════════════════════════════════════════
+# SFP ALERT MODE
+# ════════════════════════════════════════════════════════════════════════════
+# 'CREATION': Opera inmediatamente cuando se detecta el SFP (más arriesgado, mejor precio)
+# 'CONFIRMATION': Opera cuando se confirma el SFP al cerrar la vela (más seguro)
+# 'BOTH': Opera en ambos momentos (no recomendado)
+SFP_ALERT_MODE = os.environ.get('SFP_ALERT_MODE', 'CONFIRMATION')
 
 # ════════════════════════════════════════════════════════════════════════════
 # AUTENTICACIÓN
@@ -456,30 +463,45 @@ def process_order(action, symbol, price):
 # ════════════════════════════════════════════════════════════════════════════
 # WEBHOOKS
 # ════════════════════════════════════════════════════════════════════════════
-@app.route('/', methods=['GET'])
-def index():
-    return 'Bot running!'
-
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({'status': 'ok'}), 200
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        message = request.get_data(as_text=True)
-        print(f"📨 Webhook: {message}")
+        message = request.get_data(as_text=True).strip()
+        print(f"📨 Webhook recibido: {message}")
+        
         parts = message.split('|')
+        
+        # Formato nuevo: SFP|CREATION|LONG|SYMBOL|PRICE
+        # o formato viejo: LONG|SYMBOL|PRICE (para compatibilidad)
         if len(parts) >= 3:
-            action, symbol, price = parts[0].strip().upper(), parts[1].strip(), parts[2].strip()
-            if action in ['LONG', 'SHORT']:
-                print(f"✅ Acción: {action}")
+            if parts[0].upper() == 'SFP':
+                # Nuevo formato SFP
+                if len(parts) < 5:
+                    print(f"⚠️ Formato SFP incompleto: {message}")
+                    return jsonify({'status': 'error', 'message': 'Formato SFP incompleto'}), 400
+                
+                sfp_type = parts[1].upper()      # CREATION o CONFIRMATION
+                action = parts[2].upper()         # LONG o SHORT
+                symbol = parts[3].strip()
+                price = parts[4].strip()
+                
+                # Verificar si debemos operar según el modo configurado
+                if SFP_ALERT_MODE == 'BOTH' or SFP_ALERT_MODE == sfp_type:
+                    print(f"✅ SFP {sfp_type} - Acción: {action} {symbol} @ {price}")
+                    threading.Thread(target=process_order, args=(action, symbol, price)).start()
+                    return jsonify({'status': 'success', 'type': sfp_type}), 200
+                else:
+                    print(f"ℹ️ SFP {sfp_type} ignorado (modo actual: {SFP_ALERT_MODE})")
+                    return jsonify({'status': 'ignored', 'type': sfp_type}), 200
+            
+            elif parts[0].upper() in ['LONG', 'SHORT']:
+                # Formato viejo (compatibilidad)
+                action, symbol, price = parts[0].strip().upper(), parts[1].strip(), parts[2].strip()
+                print(f"✅ Acción (legacy): {action}")
                 threading.Thread(target=process_order, args=(action, symbol, price)).start()
                 return jsonify({'status': 'success'}), 200
-        return jsonify({'status': 'error'}), 400
+        
+        return jsonify({'status': 'error', 'message': 'Formato no reconocido'}), 400
+        
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
