@@ -155,25 +155,52 @@ def set_leverage(symbol, leverage):
     return result and result.get('code') == 0
 
 def place_order(symbol, side, qty):
+    """Coloca orden probando múltiples formatos de símbolo y precisión"""
     print(f"📤 Colocando orden {side} de {qty} {symbol}...")
     
-    data = {
-        'symbol': symbol,
-        'qty': str(qty),
-        'side': side,
-        'tradeSide': 'OPEN',
-        'orderType': 'MARKET'
-    }
+    # Variaciones de símbolo
+    symbol_variations = [
+        symbol,                          # AVAXUSDT
+        symbol.replace('USDT', '-USDT'), # AVAX-USDT
+        symbol.replace('USDT', '_USDT'), # AVAX_USDT
+    ]
     
-    result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                            data=data, auth=True, max_retries=3)
+    # Variaciones de precisión de cantidad
+    qty_variations = [
+        str(qty),           # 14.417
+        f"{qty:.2f}",       # 14.42
+        f"{qty:.3f}",       # 14.417
+        f"{qty:.4f}",       # 14.4170
+        str(round(qty, 2)), # 14.42
+        str(int(qty)),      # 14 (entero)
+    ]
     
-    if result and result.get('code') == 0:
-        print(f"✅ ¡ORDEN EJECUTADA!")
-        return result.get('data')
-    else:
-        print(f"❌ Error: {result}")
-        return None
+    print(f"🔍 Probando {len(symbol_variations)} símbolos x {len(qty_variations)} cantidades...")
+    
+    for sym in symbol_variations:
+        for qty_str in qty_variations:
+            print(f"\n🔄 Probando: {sym} con qty={qty_str}")
+            
+            data = {
+                'symbol': sym,
+                'qty': qty_str,
+                'side': side,
+                'tradeSide': 'OPEN',
+                'orderType': 'MARKET'
+            }
+            
+            result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                                    data=data, auth=True, max_retries=1)
+            
+            if result and result.get('code') == 0:
+                print(f"✅ ¡ORDEN EJECUTADA con {sym} qty={qty_str}!")
+                return result.get('data'), sym
+            else:
+                error_msg = result.get('msg', 'Unknown') if result else 'Sin respuesta'
+                print(f"   ❌ Error: {error_msg}")
+    
+    print(f"\n❌ Ninguna combinación funcionó")
+    return None, None
 
 def get_position_id(symbol):
     result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
@@ -421,23 +448,24 @@ def execute_order(action, raw_symbol, entry_price):
         
         print("🚀 EJECUTANDO ORDEN...")
         side = 'BUY' if action == 'LONG' else 'SELL'
-        order_result = place_order(symbol, side, quantity)
+        order_result, used_symbol = place_order(symbol, side, quantity)
         
         if order_result:
             print("⏳ Esperando 2s...")
             time.sleep(2)
             
-            position_id = get_position_id(symbol)
+            actual_symbol = used_symbol or symbol
+            position_id = get_position_id(actual_symbol)
             if position_id:
                 print(f"✅ Position ID: {position_id}")
                 print(f"🛡️ Colocando SL inicial...")
-                sl_result = place_stop_loss(symbol, position_id, params['sl'])
+                sl_result = place_stop_loss(actual_symbol, position_id, params['sl'])
                 
                 if sl_result:
                     print(f"👁️ Iniciando monitoreo BE/Trailing...")
                     monitor_thread = threading.Thread(
                         target=monitor_position,
-                        args=(symbol, float(entry_price), action, params['sl'], position_id),
+                        args=(actual_symbol, float(entry_price), action, params['sl'], position_id),
                         daemon=True
                     )
                     monitor_thread.start()
