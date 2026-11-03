@@ -272,14 +272,29 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
     highest_price = entry_price
     lowest_price = entry_price
     check_count = 0
+    consecutive_errors = 0
+    max_consecutive_errors = 3  # Detener después de 3 errores consecutivos
     
     while True:
         try:
+            # Verificar si la posición aún existe
+            current_position_id = get_position_id(symbol)
+            if current_position_id is None:
+                print(f"✅ Posición {symbol} cerrada. Deteniendo monitoreo.")
+                break
+            
             current_price = get_current_price(symbol)
             if not current_price:
                 print(f"⚠️ No se pudo obtener precio de {symbol}")
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    print(f"❌ Demasiados errores ({consecutive_errors}). Deteniendo monitoreo.")
+                    break
                 time.sleep(TRAILING_CONFIG['check_interval'])
                 continue
+            
+            # Resetear contador de errores si obtuvo precio
+            consecutive_errors = 0
             
             # Calcular PnL%
             if action == 'LONG':
@@ -334,7 +349,13 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
             print(f"⚠️ Error en monitoreo: {e}")
             import traceback
             traceback.print_exc()
+            consecutive_errors += 1
+            if consecutive_errors >= max_consecutive_errors:
+                print(f"❌ Demasiados errores. Deteniendo monitoreo.")
+                break
             time.sleep(TRAILING_CONFIG['check_interval'])
+    
+    print(f" Monitoreo finalizado para {symbol}")
 
 # ════════════════════════════════════════════════════════════════════════════
 # TRADING
