@@ -160,25 +160,34 @@ def place_order(symbol, side, qty):
     
     # Variaciones de símbolo
     symbol_variations = [
-        symbol,                          # AVAXUSDT
-        symbol.replace('USDT', '-USDT'), # AVAX-USDT
-        symbol.replace('USDT', '_USDT'), # AVAX_USDT
+        symbol,                          # AAVEUSDT
+        symbol.replace('USDT', '-USDT'), # AAVE-USDT
+        symbol.replace('USDT', '_USDT'), # AAVE_USDT
     ]
     
-    # Variaciones de precisión de cantidad
+    # Variaciones de precisión de cantidad (incluyendo más enteros)
     qty_variations = [
-        str(qty),           # 14.417
-        f"{qty:.2f}",       # 14.42
-        f"{qty:.3f}",       # 14.417
-        f"{qty:.4f}",       # 14.4170
-        str(round(qty, 2)), # 14.42
-        str(int(qty)),      # 14 (entero)
+        str(qty),           # 0.969
+        f"{qty:.2f}",       # 0.97
+        f"{qty:.3f}",       # 0.969
+        f"{qty:.4f}",       # 0.9690
+        str(round(qty, 2)), # 0.97
+        str(int(qty)),      # 0 (redondeo hacia abajo)
+        str(int(qty) + 1),  # 1 (redondeo hacia arriba)
+        str(int(qty) + 2),  # 2
+        str(int(qty) + 3),  # 3
+        str(int(qty) + 5),  # 5
+        str(int(qty) + 10), # 10
     ]
     
     print(f"🔍 Probando {len(symbol_variations)} símbolos x {len(qty_variations)} cantidades...")
     
     for sym in symbol_variations:
         for qty_str in qty_variations:
+            # Saltar si la cantidad es 0 o negativa
+            if float(qty_str) <= 0:
+                continue
+            
             print(f"\n🔄 Probando: {sym} con qty={qty_str}")
             
             data = {
@@ -198,19 +207,13 @@ def place_order(symbol, side, qty):
             else:
                 error_msg = result.get('msg', 'Unknown') if result else 'Sin respuesta'
                 print(f"   ❌ Error: {error_msg}")
+                
+                # Si el error es "not allowed to trade", saltar este símbolo
+                if 'not allowed to trade' in error_msg:
+                    break
     
     print(f"\n❌ Ninguna combinación funcionó")
     return None, None
-
-def get_position_id(symbol):
-    result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
-    if result and result.get('code') == 0:
-        data = result.get('data', [])
-        if isinstance(data, list):
-            for pos in data:
-                if pos.get('symbol') == symbol:
-                    return pos.get('positionId')
-    return None
 
 def cancel_all_tpsl_orders(symbol):
     """Cancela TODAS las órdenes TP/SL pendientes para un símbolo"""
