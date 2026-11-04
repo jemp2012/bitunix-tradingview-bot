@@ -238,7 +238,30 @@ def cancel_all_tpsl_orders(symbol):
                         print(f"   ⚠️ Error cancelando {order_id}: {cancel_result}")
             return True
     return False
-
+def get_position_id(symbol):
+    """Obtiene el ID de la posición activa para un símbolo"""
+    print(f"🔍 Buscando position ID para {symbol}...")
+    
+    # Variaciones de símbolo
+    symbol_variations = [
+        symbol,
+        symbol.replace('USDT', '-USDT'),
+        symbol.replace('USDT', '_USDT'),
+    ]
+    
+    for sym in symbol_variations:
+        result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
+        if result and result.get('code') == 0:
+            data = result.get('data', [])
+            if isinstance(data, list):
+                for pos in data:
+                    if pos.get('symbol') == sym:
+                        position_id = pos.get('positionId')
+                        print(f"✅ Position ID encontrado: {position_id} (símbolo: {sym})")
+                        return position_id
+    
+    print(f"⚠️ No se encontró position ID para {symbol}")
+    return None
 def place_stop_loss(symbol, position_id, sl_price):
     """Coloca SL: primero cancela todos los SL existentes, luego coloca el nuevo"""
     print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
