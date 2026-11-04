@@ -21,18 +21,18 @@ LEVERAGE = 5
 BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
 RISK_CONFIG = {
-    'ZEC': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'SOL': {'sl_atr_mult': 2.5, 'tp_rr': 2.5},
-    'AVAX': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'BCH': {'sl_atr_mult': 1.8, 'tp_rr': 2.0},
-    'AAVE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'ARB': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'LDO': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'ENS': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'ZAMAL': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'HYPE': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'PUMPFUN': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
-    'default': {'sl_atr_mult': 1.8, 'tp_rr': 2.0}
+    'ZEC': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'SOL': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'AVAX': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'BCH': {'sl_atr_mult': 1.2, 'tp_rr': 1.8},
+    'AAVE': {'sl_atr_mult': 1.2, 'tp_rr': 1.8},
+    'ARB': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'LDO': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'ENS': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'ZAMA': {'sl_atr_mult': 1.5, 'tp_rr': 2.0}, 
+    'HYPE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'PUMPFUN': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'default': {'sl_atr_mult': 1.3, 'tp_rr': 1.8}
 }
 
 TRAILING_CONFIG = {
@@ -455,13 +455,18 @@ def get_risk_params(symbol, entry_price, atr):
     
     if atr:
         sl_distance = atr * sl_mult
+        
+        # Límite máximo: 1.2% del precio de entrada
+        max_sl_distance = entry_price * 0.012
+        sl_distance = min(sl_distance, max_sl_distance)
+        
         return {
             'LONG': {'sl': round(entry_price - sl_distance, 4), 'tp': round(entry_price + (sl_distance * tp_rr), 4)},
             'SHORT': {'sl': round(entry_price + sl_distance, 4), 'tp': round(entry_price - (sl_distance * tp_rr), 4)}
         }
     return {
-        'LONG': {'sl': round(entry_price * 0.98, 4), 'tp': round(entry_price * 1.04, 4)},
-        'SHORT': {'sl': round(entry_price * 1.02, 4), 'tp': round(entry_price * 0.96, 4)}
+        'LONG': {'sl': round(entry_price * 0.988, 4), 'tp': round(entry_price * 1.024, 4)},
+        'SHORT': {'sl': round(entry_price * 1.012, 4), 'tp': round(entry_price * 0.976, 4)}
     }
 
 def calculate_quantity(balance, entry_price, percent, leverage):
