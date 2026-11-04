@@ -262,25 +262,53 @@ def get_position_id(symbol):
     
     print(f"⚠️ No se encontró position ID para {symbol}")
     return None
+def get_price_precision(price):
+    """Determina la precisión decimal según el precio"""
+    if price >= 1000:
+        return 2
+    elif price >= 100:
+        return 2
+    elif price >= 10:
+        return 2
+    elif price >= 1:
+        return 3
+    elif price >= 0.1:
+        return 4
+    elif price >= 0.01:
+        return 5
+    elif price >= 0.001:
+        return 6
+    else:
+        return 7
+
 def place_stop_loss(symbol, position_id, sl_price):
-    """Coloca SL: primero cancela todos los SL existentes, luego coloca el nuevo"""
+    """Coloca SL con precisión dinámica según el precio"""
     print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
     
-    # Paso 1: Cancelar TODOS los SL existentes
-    cancel_all_tpsl_orders(symbol)
-    time.sleep(1)  # Esperar a que se procesen las cancelaciones
+    # Determinar precisión adecuada
+    precision = get_price_precision(sl_price)
+    sl_price_rounded = round(sl_price, precision)
     
-    # Paso 2: Colocar nuevo SL
+    print(f"📊 Precisión usada: {precision} decimales → SL: {sl_price_rounded}")
+    
+    # Cancelar SL existentes
+    existing_order = get_pending_tpsl_orders(symbol, position_id)
+    if existing_order:
+        order_id = existing_order.get('orderId')
+        if order_id:
+            cancel_tpsl_order(symbol, order_id)
+            time.sleep(1)
+    
     data = {
         'symbol': symbol,
         'positionId': str(position_id),
-        'slPrice': str(round(sl_price, 2))
+        'slPrice': str(sl_price_rounded)
     }
     
     result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True)
     
     if result and result.get('code') == 0:
-        print(f"✅ Stop Loss colocado exitosamente: {sl_price}")
+        print(f"✅ Stop Loss colocado exitosamente: {sl_price_rounded}")
         return result.get('data')
     else:
         print(f"⚠️ Error colocando SL: {result}")
