@@ -29,6 +29,9 @@ RISK_CONFIG = {
     'ARB': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'LDO': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'ENS': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
+    'ZAMAL': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
+    'HYPE': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
+    'PUMPFUN': {'sl_atr_mult': 2.0, 'tp_rr': 2.5},
     'default': {'sl_atr_mult': 1.8, 'tp_rr': 2.0}
 }
 
@@ -37,6 +40,7 @@ TRAILING_CONFIG = {
     'trail_pct': 0.5,
     'check_interval': 10
 }
+
 # ════════════════════════════════════════════════════════════════════════════
 # SFP ALERT MODE
 # ════════════════════════════════════════════════════════════════════════════
@@ -158,33 +162,30 @@ def place_order(symbol, side, qty):
     """Coloca orden probando múltiples formatos de símbolo y precisión"""
     print(f"📤 Colocando orden {side} de {qty} {symbol}...")
     
-    # Variaciones de símbolo
     symbol_variations = [
-        symbol,                          # AAVEUSDT
-        symbol.replace('USDT', '-USDT'), # AAVE-USDT
-        symbol.replace('USDT', '_USDT'), # AAVE_USDT
+        symbol,
+        symbol.replace('USDT', '-USDT'),
+        symbol.replace('USDT', '_USDT'),
     ]
     
-    # Variaciones de precisión de cantidad (incluyendo más enteros)
     qty_variations = [
-        str(qty),           # 0.969
-        f"{qty:.2f}",       # 0.97
-        f"{qty:.3f}",       # 0.969
-        f"{qty:.4f}",       # 0.9690
-        str(round(qty, 2)), # 0.97
-        str(int(qty)),      # 0 (redondeo hacia abajo)
-        str(int(qty) + 1),  # 1 (redondeo hacia arriba)
-        str(int(qty) + 2),  # 2
-        str(int(qty) + 3),  # 3
-        str(int(qty) + 5),  # 5
-        str(int(qty) + 10), # 10
+        str(qty),
+        f"{qty:.2f}",
+        f"{qty:.3f}",
+        f"{qty:.4f}",
+        str(round(qty, 2)),
+        str(int(qty)),
+        str(int(qty) + 1),
+        str(int(qty) + 2),
+        str(int(qty) + 3),
+        str(int(qty) + 5),
+        str(int(qty) + 10),
     ]
     
     print(f"🔍 Probando {len(symbol_variations)} símbolos x {len(qty_variations)} cantidades...")
     
     for sym in symbol_variations:
         for qty_str in qty_variations:
-            # Saltar si la cantidad es 0 o negativa
             if float(qty_str) <= 0:
                 continue
             
@@ -208,41 +209,16 @@ def place_order(symbol, side, qty):
                 error_msg = result.get('msg', 'Unknown') if result else 'Sin respuesta'
                 print(f"   ❌ Error: {error_msg}")
                 
-                # Si el error es "not allowed to trade", saltar este símbolo
                 if 'not allowed to trade' in error_msg:
                     break
     
     print(f"\n❌ Ninguna combinación funcionó")
     return None, None
 
-def cancel_all_tpsl_orders(symbol):
-    """Cancela TODAS las órdenes TP/SL pendientes para un símbolo"""
-    print(f"🗑️ Cancelando todas las órdenes TP/SL para {symbol}...")
-    
-    result = bitunix_request('GET', '/api/v1/futures/tpsl/get_pending_orders', 
-                            params={'symbol': symbol}, auth=True)
-    
-    if result and result.get('code') == 0:
-        orders = result.get('data', [])
-        if isinstance(orders, list):
-            for order in orders:
-                order_id = order.get('orderId')
-                if order_id:
-                    print(f"   Cancelando orden {order_id}...")
-                    cancel_result = bitunix_request('POST', '/api/v1/futures/tpsl/cancel_order', 
-                                                   data={'symbol': symbol, 'orderId': str(order_id)}, 
-                                                   auth=True)
-                    if cancel_result and cancel_result.get('code') == 0:
-                        print(f"   ✅ Orden {order_id} cancelada")
-                    else:
-                        print(f"   ⚠️ Error cancelando {order_id}: {cancel_result}")
-            return True
-    return False
 def get_position_id(symbol):
     """Obtiene el ID de la posición activa para un símbolo"""
     print(f"🔍 Buscando position ID para {symbol}...")
     
-    # Variaciones de símbolo
     symbol_variations = [
         symbol,
         symbol.replace('USDT', '-USDT'),
@@ -262,6 +238,37 @@ def get_position_id(symbol):
     
     print(f"⚠️ No se encontró position ID para {symbol}")
     return None
+
+def get_pending_tpsl_orders(symbol, position_id):
+    """Obtiene las órdenes TP/SL pendientes para una posición específica"""
+    print(f"🔍 Buscando órdenes TP/SL pendientes para {symbol}...")
+    result = bitunix_request('GET', '/api/v1/futures/tpsl/get_pending_orders', 
+                            params={'symbol': symbol}, auth=True)
+    
+    if result and result.get('code') == 0:
+        data = result.get('data', [])
+        if isinstance(data, list):
+            for order in data:
+                if str(order.get('positionId')) == str(position_id):
+                    print(f"✅ Orden TP/SL encontrada: ID {order.get('orderId')}")
+                    return order
+    return None
+
+def cancel_tpsl_order(symbol, order_id):
+    """Cancela una orden TP/SL existente"""
+    print(f"🗑️ Cancelando orden TP/SL {order_id}...")
+    result = bitunix_request('POST', '/api/v1/futures/tpsl/cancel_order', data={
+        'symbol': symbol,
+        'orderId': str(order_id)
+    }, auth=True)
+    
+    if result and result.get('code') == 0:
+        print(f"✅ Orden TP/SL cancelada exitosamente")
+        return True
+    else:
+        print(f"⚠️ Error cancelando orden: {result}")
+        return False
+
 def get_price_precision(price):
     """Determina la precisión decimal según el precio"""
     if price >= 1000:
@@ -285,13 +292,11 @@ def place_stop_loss(symbol, position_id, sl_price):
     """Coloca SL con precisión dinámica según el precio"""
     print(f"🛡️ Colocando SL en {sl_price} para {symbol} (Position ID: {position_id})...")
     
-    # Determinar precisión adecuada
     precision = get_price_precision(sl_price)
     sl_price_rounded = round(sl_price, precision)
     
     print(f"📊 Precisión usada: {precision} decimales → SL: {sl_price_rounded}")
     
-    # Cancelar SL existentes
     existing_order = get_pending_tpsl_orders(symbol, position_id)
     if existing_order:
         order_id = existing_order.get('orderId')
@@ -316,8 +321,6 @@ def place_stop_loss(symbol, position_id, sl_price):
 
 def get_current_price(symbol):
     """Obtiene el precio actual - versión optimizada"""
-    
-    # Solo probar el formato original primero (el que ya sabemos que funciona)
     endpoints_to_try = [
         ('/api/v1/futures/market/kline', {'symbol': symbol, 'interval': '1m', 'limit': 1}),
         ('/api/v1/futures/market/ticker', {'symbol': symbol}),
@@ -341,14 +344,13 @@ def get_current_price(symbol):
                 
                 if price is not None:
                     return float(price)
-                    
-        except Exception as e:
+        except Exception:
             continue
     
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
-# MONITOREO CON BE + TRAILING STOP (OPTIMIZADO)
+# MONITOREO CON BE + TRAILING STOP
 # ═════════════════════════════════════════════════════════════════════════════
 def monitor_position(symbol, entry_price, action, initial_sl, position_id):
     print(f"\n👁️ Monitoreo iniciado: {symbol} {action}")
@@ -361,11 +363,10 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
     lowest_price = entry_price
     check_count = 0
     consecutive_errors = 0
-    max_consecutive_errors = 3  # Detener después de 3 errores consecutivos
+    max_consecutive_errors = 3
     
     while True:
         try:
-            # Verificar si la posición aún existe
             current_position_id = get_position_id(symbol)
             if current_position_id is None:
                 print(f"✅ Posición {symbol} cerrada. Deteniendo monitoreo.")
@@ -381,26 +382,22 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
                 time.sleep(TRAILING_CONFIG['check_interval'])
                 continue
             
-            # Resetear contador de errores si obtuvo precio
             consecutive_errors = 0
             
-            # Calcular PnL%
             if action == 'LONG':
                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
                 if current_price > highest_price:
                     highest_price = current_price
-            else:  # SHORT
+            else:
                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
                 if current_price < lowest_price:
                     lowest_price = current_price
             
             check_count += 1
             
-            # Log cada 30 segundos (cada 3 checks)
             if check_count % 3 == 0:
                 print(f"📊 [{check_count}] Precio: {current_price} | PnL: {pnl_pct:.2f}% | Highest: {highest_price} | Lowest: {lowest_price}")
             
-            # Activar Break Even al 1%
             if pnl_pct >= TRAILING_CONFIG['activation_pct'] and not be_activated:
                 print(f"\n🎯 ¡BE ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRAILING_CONFIG['activation_pct']}%")
                 print(f"   Moviendo SL al precio de entrada: {entry_price}")
@@ -414,7 +411,6 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
                 else:
                     print(f"❌ No se pudo colocar BE, reintentando en próximo ciclo...")
             
-            # Trailing Stop después de activar BE
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRAILING_CONFIG['trail_pct'] / 100)
@@ -423,7 +419,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
                         sl_result = place_stop_loss(symbol, position_id, new_sl)
                         if sl_result:
                             print(f"✅ Trailing SL actualizado: {new_sl:.2f}")
-                else:  # SHORT
+                else:
                     new_sl = lowest_price * (1 + TRAILING_CONFIG['trail_pct'] / 100)
                     if new_sl < entry_price:
                         print(f"📉 Trailing: new_sl={new_sl:.2f} < entry={entry_price}, actualizando...")
@@ -443,7 +439,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id):
                 break
             time.sleep(TRAILING_CONFIG['check_interval'])
     
-    print(f" Monitoreo finalizado para {symbol}")
+    print(f"🏁 Monitoreo finalizado para {symbol}")
 
 # ════════════════════════════════════════════════════════════════════════════
 # TRADING
@@ -545,6 +541,14 @@ def process_order(action, symbol, price):
 # ════════════════════════════════════════════════════════════════════════════
 # WEBHOOKS
 # ════════════════════════════════════════════════════════════════════════════
+@app.route('/', methods=['GET'])
+def index():
+    return 'Bot running!'
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'}), 200
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -553,21 +557,17 @@ def webhook():
         
         parts = message.split('|')
         
-        # Formato nuevo: SFP|CREATION|LONG|SYMBOL|PRICE
-        # o formato viejo: LONG|SYMBOL|PRICE (para compatibilidad)
         if len(parts) >= 3:
             if parts[0].upper() == 'SFP':
-                # Nuevo formato SFP
                 if len(parts) < 5:
                     print(f"⚠️ Formato SFP incompleto: {message}")
                     return jsonify({'status': 'error', 'message': 'Formato SFP incompleto'}), 400
                 
-                sfp_type = parts[1].upper()      # CREATION o CONFIRMATION
-                action = parts[2].upper()         # LONG o SHORT
+                sfp_type = parts[1].upper()
+                action = parts[2].upper()
                 symbol = parts[3].strip()
                 price = parts[4].strip()
                 
-                # Verificar si debemos operar según el modo configurado
                 if SFP_ALERT_MODE == 'BOTH' or SFP_ALERT_MODE == sfp_type:
                     print(f"✅ SFP {sfp_type} - Acción: {action} {symbol} @ {price}")
                     threading.Thread(target=process_order, args=(action, symbol, price)).start()
@@ -577,7 +577,6 @@ def webhook():
                     return jsonify({'status': 'ignored', 'type': sfp_type}), 200
             
             elif parts[0].upper() in ['LONG', 'SHORT']:
-                # Formato viejo (compatibilidad)
                 action, symbol, price = parts[0].strip().upper(), parts[1].strip(), parts[2].strip()
                 print(f"✅ Acción (legacy): {action}")
                 threading.Thread(target=process_order, args=(action, symbol, price)).start()
@@ -587,3 +586,7 @@ def webhook():
         
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
