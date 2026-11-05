@@ -37,17 +37,17 @@ RISK_CONFIG = {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# NUEVA CONFIGURACIÓN DE GESTIÓN DE TRADES
+# CONFIGURACIÓN DE GESTIÓN DE TRADES
 # ═════════════════════════════════════════════════════════════════════════════
 TRADE_MANAGEMENT = {
-    'be_activation_pct': 1.0,      # BE al 1%
-    'tp1_pct': 1.0,                # TP1 al 1% (50% del volumen)
-    'tp1_close_pct': 50.0,         # Cerrar 50% en TP1
-    'tp2_pct': 2.0,                # TP2 al 2% (50% del remanente)
-    'tp2_close_pct': 50.0,         # Cerrar 50% del remanente en TP2
-    'trailing_activation_pct': 2.0,# Activar Trailing al 2%
-    'trailing_distance_pct': 1.0,  # Trailing Stop al 1% de distancia
-    'check_interval': 10           # Verificar cada 10 segundos
+    'be_activation_pct': 1.0,
+    'tp1_pct': 1.0,
+    'tp1_close_pct': 50.0,
+    'tp2_pct': 2.0,
+    'tp2_close_pct': 50.0,
+    'trailing_activation_pct': 2.0,
+    'trailing_distance_pct': 1.0,
+    'check_interval': 10
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -272,7 +272,7 @@ def close_partial_position(symbol, side, qty):
     return None
 
 def get_position_id(symbol):
-    """Obtiene el ID de la posición activa para un símbolo"""
+    """Obtiene el ID y cantidad de la posición activa para un símbolo"""
     print(f"🔍 Buscando position ID para {symbol}...")
     
     symbol_variations = [
@@ -281,19 +281,48 @@ def get_position_id(symbol):
         symbol.replace('USDT', '_USDT'),
     ]
     
-    for sym in symbol_variations:
-        result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
-        if result and result.get('code') == 0:
-            data = result.get('data', [])
-            if isinstance(data, list):
-                for pos in data:
-                    if pos.get('symbol') == sym:
-                        position_id = pos.get('positionId')
-                        position_qty = pos.get('positionQty', 0)
-                        print(f"✅ Position ID encontrado: {position_id} (símbolo: {sym}, qty: {position_qty})")
-                        return position_id, float(position_qty)
+    result = bitunix_request('GET', '/api/v1/futures/position/get_pending_positions', auth=True)
     
-    print(f"⚠️ No se encontró position ID para {symbol}")
+    if not result or result.get('code') != 0:
+        print(f"⚠️ Error obteniendo posiciones: {result}")
+        return None, 0
+    
+    data = result.get('data', [])
+    if not isinstance(data, list):
+        print(f"⚠️ Formato de datos inesperado: {type(data)}")
+        return None, 0
+    
+    # Imprimir todas las posiciones para debug (solo la primera vez)
+    if not hasattr(get_position_id, '_logged'):
+        get_position_id._logged = True
+        print(f"📋 Todas las posiciones abiertas:")
+        for pos in data:
+            qty = pos.get('positionQty', pos.get('qty', pos.get('size', pos.get('holdQty', pos.get('positionSize', 'N/A')))))
+            print(f"   - {pos.get('symbol')}: qty={qty}")
+    
+    for pos in data:
+        pos_symbol = pos.get('symbol', '')
+        
+        if pos_symbol in symbol_variations:
+            position_id = pos.get('positionId')
+            
+            # Probar múltiples nombres de campo para la cantidad
+            position_qty = (
+                pos.get('positionQty') or 
+                pos.get('qty') or 
+                pos.get('size') or 
+                pos.get('holdQty') or 
+                pos.get('positionSize') or 
+                0
+            )
+            position_qty = float(position_qty) if position_qty else 0.0
+            
+            print(f"✅ Position ID encontrado: {position_id} (símbolo: {pos_symbol}, qty: {position_qty})")
+            
+            if position_qty > 0:
+                return position_id, position_qty
+    
+    print(f"⚠️ No se encontró posición activa para {symbol}")
     return None, 0
 
 def get_pending_tpsl_orders(symbol, position_id):
@@ -407,7 +436,7 @@ def get_current_price(symbol):
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
-# NUEVO MONITOREO CON PARCIALES Y TRAILING
+# MONITOREO CON PARCIALES Y TRAILING
 # ═════════════════════════════════════════════════════════════════════════════
 def monitor_position(symbol, entry_price, action, initial_sl, position_id, initial_qty):
     print(f"\n👁️ Monitoreo iniciado: {symbol} {action}")
@@ -415,6 +444,15 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     print(f"   TP1: {TRADE_MANAGEMENT['tp1_pct']}% (cerrar {TRADE_MANAGEMENT['tp1_close_pct']}%)")
     print(f"   TP2: {TRADE_MANAGEMENT['tp2_pct']}% (cerrar {TRADE_MANAGEMENT['tp2_close_pct']}% restante)")
     print(f"   Trailing: {TRADE_MANAGEMENT['trailing_distance_pct']}% después de TP2")
+    
+    # Si no tenemos qty inicial, intentar obtenerlo
+    if initial_qty <= 0:
+        print(f"⚠️ Qty inicial es 0, esperando 5s para que Bitunix registre la posición...")
+        time.sleep(5)
+        _, initial_qty = get_position_id(symbol)
+        if initial_qty <= 0:
+            print(f"❌ No se pudo obtener qty inicial. Deteniendo monitoreo.")
+            return
     
     tp1_activated = False
     tp2_activated = False
@@ -424,17 +462,28 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     check_count = 0
     consecutive_errors = 0
     max_consecutive_errors = 3
+    zero_qty_count = 0
     
-    # Dirección de cierre (opuesto a la apertura)
     close_side = 'SELL' if action == 'LONG' else 'BUY'
     
     while True:
         try:
-            # Verificar si la posición aún existe
             current_position_id, current_qty = get_position_id(symbol)
-            if current_position_id is None or current_qty <= 0:
-                print(f"✅ Posición {symbol} cerrada. Deteniendo monitoreo.")
+            
+            if current_position_id is None:
+                print(f"✅ Posición {symbol} cerrada (no encontrada). Deteniendo monitoreo.")
                 break
+            
+            if current_qty <= 0:
+                zero_qty_count += 1
+                print(f"⚠️ Qty=0 detectado ({zero_qty_count}/3). Reintentando...")
+                if zero_qty_count >= 3:
+                    print(f"❌ Qty=0 durante 3 checks consecutivos. Asumiendo posición cerrada.")
+                    break
+                time.sleep(TRADE_MANAGEMENT['check_interval'])
+                continue
+            
+            zero_qty_count = 0
             
             current_price = get_current_price(symbol)
             if not current_price:
@@ -448,7 +497,6 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             
             consecutive_errors = 0
             
-            # Calcular PnL%
             if action == 'LONG':
                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
                 if current_price > highest_price:
@@ -467,20 +515,17 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
                 print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
-                # Calcular cantidad a cerrar (50% del volumen inicial)
                 qty_to_close = initial_qty * (TRADE_MANAGEMENT['tp1_close_pct'] / 100)
                 qty_to_close = round(qty_to_close, get_price_precision(current_price))
                 
                 print(f"   Cerrando {TRADE_MANAGEMENT['tp1_close_pct']}% ({qty_to_close} {symbol})...")
                 
-                # Cerrar parcialmente
                 close_result = close_partial_position(symbol, close_side, qty_to_close)
                 
                 if close_result:
                     print(f"✅ TP1 ejecutado: {qty_to_close} {symbol} cerrados")
                     tp1_activated = True
                     
-                    # Mover SL a BE
                     print(f"   Moviendo SL a BE: {entry_price}")
                     place_stop_loss(symbol, current_position_id, entry_price)
                 else:
@@ -490,13 +535,11 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if pnl_pct >= TRADE_MANAGEMENT['tp2_pct'] and tp1_activated and not tp2_activated:
                 print(f"\n🎯 ¡TP2 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp2_pct']}%")
                 
-                # Calcular cantidad a cerrar (50% del remanente)
                 qty_to_close = current_qty * (TRADE_MANAGEMENT['tp2_close_pct'] / 100)
                 qty_to_close = round(qty_to_close, get_price_precision(current_price))
                 
                 print(f"   Cerrando {TRADE_MANAGEMENT['tp2_close_pct']}% del remanente ({qty_to_close} {symbol})...")
                 
-                # Cerrar parcialmente
                 close_result = close_partial_position(symbol, close_side, qty_to_close)
                 
                 if close_result:
@@ -504,7 +547,6 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                     tp2_activated = True
                     trailing_activated = True
                     
-                    # Activar Trailing Stop
                     print(f"   Activando Trailing Stop al {TRADE_MANAGEMENT['trailing_distance_pct']}%")
                 else:
                     print(f"❌ No se pudo ejecutar TP2, reintentando...")
@@ -560,7 +602,6 @@ def get_risk_params(symbol, entry_price, atr):
     if atr:
         sl_distance = atr * sl_mult
         
-        # Límite máximo: 1.2% del precio de entrada
         max_sl_distance = entry_price * 0.012
         sl_distance = min(sl_distance, max_sl_distance)
         
