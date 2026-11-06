@@ -222,7 +222,7 @@ def place_order(symbol, side, qty):
     return None, None
 
 def close_partial_position(symbol, side, qty):
-    """Cierra una posición parcialmente"""
+    """Cierra una posición parcialmente con reduceOnly=true"""
     print(f"📤 Cerrando posición parcial: {qty} {symbol} ({side})...")
     
     symbol_variations = [
@@ -231,6 +231,7 @@ def close_partial_position(symbol, side, qty):
         symbol.replace('USDT', '_USDT'),
     ]
     
+    # Variaciones de cantidad incluyendo enteros
     qty_variations = [
         str(qty),
         f"{qty:.2f}",
@@ -238,6 +239,7 @@ def close_partial_position(symbol, side, qty):
         f"{qty:.4f}",
         str(round(qty, 2)),
         str(int(qty)),
+        str(int(qty) + 1),
     ]
     
     for sym in symbol_variations:
@@ -252,7 +254,8 @@ def close_partial_position(symbol, side, qty):
                 'qty': qty_str,
                 'side': side,
                 'tradeSide': 'CLOSE',
-                'orderType': 'MARKET'
+                'orderType': 'MARKET',
+                'reduceOnly': True  # ← CLAVE: indica que es un cierre parcial
             }
             
             result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
