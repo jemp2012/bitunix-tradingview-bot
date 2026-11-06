@@ -231,7 +231,6 @@ def close_partial_position(symbol, side, qty):
         symbol.replace('USDT', '_USDT'),
     ]
     
-    # Variaciones de cantidad incluyendo enteros
     qty_variations = [
         str(qty),
         f"{qty:.2f}",
@@ -255,7 +254,7 @@ def close_partial_position(symbol, side, qty):
                 'side': side,
                 'tradeSide': 'CLOSE',
                 'orderType': 'MARKET',
-                'reduceOnly': True  # ← CLAVE: indica que es un cierre parcial
+                'reduceOnly': True  # ← CLAVE para cierres parciales
             }
             
             result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
@@ -514,25 +513,33 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if check_count % 3 == 0:
                 print(f"📊 [{check_count}] Precio: {current_price} | PnL: {pnl_pct:.2f}% | Qty: {current_qty} | Highest: {highest_price} | Lowest: {lowest_price}")
             
-            # TP1: BE + Cerrar 50% al 1%
-            if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
-                print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
-                
-                qty_to_close = initial_qty * (TRADE_MANAGEMENT['tp1_close_pct'] / 100)
-                qty_to_close = round(qty_to_close, get_price_precision(current_price))
-                
-                print(f"   Cerrando {TRADE_MANAGEMENT['tp1_close_pct']}% ({qty_to_close} {symbol})...")
-                
-                close_result = close_partial_position(symbol, close_side, qty_to_close)
-                
-                if close_result:
-                    print(f"✅ TP1 ejecutado: {qty_to_close} {symbol} cerrados")
-                    tp1_activated = True
-                    
-                    print(f"   Moviendo SL a BE: {entry_price}")
-                    place_stop_loss(symbol, current_position_id, entry_price)
-                else:
-                    print(f"❌ No se pudo ejecutar TP1, reintentando...")
+           # TP1: BE + Cerrar 50% al 1%
+if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
+    print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
+    
+    # PASO 1: Mover SL a BE (INDEPENDIENTE del cierre parcial)
+    print(f"   Moviendo SL a BE: {entry_price}")
+    be_result = place_stop_loss(symbol, current_position_id, entry_price)
+    
+    if be_result:
+        print(f"✅ BE colocado exitosamente en {entry_price}")
+    else:
+        print(f"⚠️ No se pudo colocar BE, reintentando en próximo ciclo...")
+    
+    # PASO 2: Intentar cierre parcial
+    qty_to_close = initial_qty * (TRADE_MANAGEMENT['tp1_close_pct'] / 100)
+    qty_to_close = round(qty_to_close, get_price_precision(current_price))
+    
+    print(f"   Cerrando {TRADE_MANAGEMENT['tp1_close_pct']}% ({qty_to_close} {symbol})...")
+    
+    close_result = close_partial_position(symbol, close_side, qty_to_close)
+    
+    if close_result:
+        print(f"✅ TP1 ejecutado: {qty_to_close} {symbol} cerrados")
+        tp1_activated = True
+    else:
+        print(f"❌ No se pudo ejecutar cierre parcial, pero BE ya está colocado")
+        tp1_activated = True  # Marcar como activado para no reintentar BE
             
             # TP2: Cerrar 50% del remanente + Activar Trailing al 2%
             if pnl_pct >= TRADE_MANAGEMENT['tp2_pct'] and tp1_activated and not tp2_activated:
