@@ -29,7 +29,6 @@ RISK_CONFIG = {
     'ARB': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'LDO': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'ENS': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'ZAMAL': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'ZAMA': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'HYPE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'PUMPFUN': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
