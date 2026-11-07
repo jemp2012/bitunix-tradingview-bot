@@ -35,6 +35,12 @@ RISK_CONFIG = {
     'PUMPFUN': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'VVV': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'ATOM': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'BTW': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'STX': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'WLD': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'LIGHTER': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'INJ': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
+    'RAY': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
     'default': {'sl_atr_mult': 1.3, 'tp_rr': 1.8}
 }
 
@@ -227,6 +233,16 @@ def close_partial_position(symbol, side, qty):
     """Cierra una posición parcialmente con reduceOnly=true"""
     print(f"📤 Cerrando posición parcial: {qty} {symbol} ({side})...")
     
+    # Verificar que la posición existe y tiene suficiente cantidad
+    current_pos_id, current_qty = get_position_id(symbol)
+    if current_pos_id is None or current_qty <= 0:
+        print(f"⚠️ No hay posición activa para cerrar")
+        return None
+    
+    if current_qty < qty:
+        print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición actual ({current_qty})")
+        qty = current_qty  # Ajustar a la cantidad disponible
+    
     symbol_variations = [
         symbol,
         symbol.replace('USDT', '-USDT'),
@@ -295,13 +311,6 @@ def get_position_id(symbol):
     if not isinstance(data, list):
         print(f"⚠️ Formato de datos inesperado: {type(data)}")
         return None, 0
-    
-    if not hasattr(get_position_id, '_logged'):
-        get_position_id._logged = True
-        print(f"📋 Todas las posiciones abiertas:")
-        for pos in data:
-            qty = pos.get('positionQty', pos.get('qty', pos.get('size', pos.get('holdQty', pos.get('positionSize', 'N/A')))))
-            print(f"   - {pos.get('symbol')}: qty={qty}")
     
     for pos in data:
         pos_symbol = pos.get('symbol', '')
@@ -448,7 +457,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     print(f"   Trailing: {TRADE_MANAGEMENT['trailing_distance_pct']}% después de TP2")
     
     if initial_qty <= 0:
-        print(f"⚠️ Qty inicial es 0, esperando 5s para que Bitunix registre la posición...")
+        print(f"⚠️ Qty inicial es 0, esperando 5s...")
         time.sleep(5)
         _, initial_qty = get_position_id(symbol)
         if initial_qty <= 0:
@@ -512,31 +521,31 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if check_count % 3 == 0:
                 print(f"📊 [{check_count}] Precio: {current_price} | PnL: {pnl_pct:.2f}% | Qty: {current_qty} | Highest: {highest_price} | Lowest: {lowest_price}")
             
-            # TP1: BE + Cerrar 50% al 1% (BE independiente del cierre parcial)
+            # TP1: BE + Cerrar 50% al 1%
             if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
                 print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
-                # PASO 1: Mover SL a BE (siempre, independiente del cierre)
-                print(f"   Moviendo SL a BE: {entry_price}")
+                # PASO 1: Mover SL a BE
+                print(f"   📍 Moviendo SL a BE: {entry_price}")
                 be_result = place_stop_loss(symbol, current_position_id, entry_price)
                 
                 if be_result:
-                    print(f"✅ BE colocado exitosamente en {entry_price}")
+                    print(f"   ✅ BE colocado exitosamente en {entry_price}")
                 else:
-                    print(f"⚠️ No se pudo colocar BE, reintentando en próximo ciclo...")
+                    print(f"   ⚠️ No se pudo colocar BE")
                 
-                # PASO 2: Intentar cierre parcial
+                # PASO 2: Cerrar 50%
                 qty_to_close = initial_qty * (TRADE_MANAGEMENT['tp1_close_pct'] / 100)
                 qty_to_close = round(qty_to_close, get_price_precision(current_price))
                 
-                print(f"   Cerrando {TRADE_MANAGEMENT['tp1_close_pct']}% ({qty_to_close} {symbol})...")
+                print(f"   📤 Cerrando {TRADE_MANAGEMENT['tp1_close_pct']}% ({qty_to_close} {symbol})...")
                 
                 close_result = close_partial_position(symbol, close_side, qty_to_close)
                 
                 if close_result:
-                    print(f"✅ TP1 ejecutado: {qty_to_close} {symbol} cerrados")
+                    print(f"   ✅ TP1 ejecutado: {qty_to_close} {symbol} cerrados")
                 else:
-                    print(f"⚠️ No se pudo ejecutar cierre parcial, pero BE ya está colocado")
+                    print(f"   ⚠️ No se pudo ejecutar cierre parcial")
                 
                 tp1_activated = True
             
@@ -547,35 +556,34 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 qty_to_close = current_qty * (TRADE_MANAGEMENT['tp2_close_pct'] / 100)
                 qty_to_close = round(qty_to_close, get_price_precision(current_price))
                 
-                print(f"   Cerrando {TRADE_MANAGEMENT['tp2_close_pct']}% del remanente ({qty_to_close} {symbol})...")
+                print(f"   📤 Cerrando {TRADE_MANAGEMENT['tp2_close_pct']}% del remanente ({qty_to_close} {symbol})...")
                 
                 close_result = close_partial_position(symbol, close_side, qty_to_close)
                 
                 if close_result:
-                    print(f"✅ TP2 ejecutado: {qty_to_close} {symbol} cerrados")
+                    print(f"   ✅ TP2 ejecutado: {qty_to_close} {symbol} cerrados")
                     tp2_activated = True
                     trailing_activated = True
-                    
-                    print(f"   Activando Trailing Stop al {TRADE_MANAGEMENT['trailing_distance_pct']}%")
+                    print(f"   🎯 Activando Trailing Stop al {TRADE_MANAGEMENT['trailing_distance_pct']}%")
                 else:
-                    print(f"❌ No se pudo ejecutar TP2, reintentando...")
+                    print(f"   ❌ No se pudo ejecutar TP2")
             
             # Trailing Stop después de TP2
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
                     if new_sl > entry_price:
-                        print(f"📈 Trailing: new_sl={new_sl:.4f} > entry={entry_price}, actualizando...")
+                        print(f"📈 Trailing: new_sl={new_sl:.4f} > entry={entry_price}")
                         sl_result = place_stop_loss(symbol, current_position_id, new_sl)
                         if sl_result:
-                            print(f"✅ Trailing SL actualizado: {new_sl:.4f}")
+                            print(f"   ✅ Trailing SL actualizado: {new_sl:.4f}")
                 else:
                     new_sl = lowest_price * (1 + TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
                     if new_sl < entry_price:
-                        print(f"📉 Trailing: new_sl={new_sl:.4f} < entry={entry_price}, actualizando...")
+                        print(f"📉 Trailing: new_sl={new_sl:.4f} < entry={entry_price}")
                         sl_result = place_stop_loss(symbol, current_position_id, new_sl)
                         if sl_result:
-                            print(f"✅ Trailing SL actualizado: {new_sl:.4f}")
+                            print(f"   ✅ Trailing SL actualizado: {new_sl:.4f}")
             
             time.sleep(TRADE_MANAGEMENT['check_interval'])
             
@@ -610,7 +618,6 @@ def get_risk_params(symbol, entry_price, atr):
     
     if atr:
         sl_distance = atr * sl_mult
-        
         max_sl_distance = entry_price * 0.012
         sl_distance = min(sl_distance, max_sl_distance)
         
@@ -637,6 +644,13 @@ def execute_order(action, raw_symbol, entry_price):
         
         symbol = convert_symbol(raw_symbol)
         print(f"✅ Símbolo: {raw_symbol} -> {symbol}")
+        
+        # VERIFICAR SI YA EXISTE UNA POSICIÓN
+        existing_pos_id, existing_qty = get_position_id(symbol)
+        if existing_pos_id is not None and existing_qty > 0:
+            print(f"⚠️ Ya existe una posición activa para {symbol} ({existing_qty} unidades)")
+            print(f"⚠️ No se abrirá una nueva posición")
+            return
         
         balance = get_balance()
         if balance <= 0:
