@@ -229,7 +229,7 @@ def place_order(symbol, side, qty):
     return None, None
 
 def close_partial_position(symbol, side, qty):
-    """Cierra una posición parcialmente con reduceOnly='true'"""
+    """Cierra una posición parcialmente con fallback inteligente"""
     print(f"📤 Cerrando posición parcial: {qty} {symbol} ({side})...")
     
     # Verificar que la posición existe
@@ -239,23 +239,17 @@ def close_partial_position(symbol, side, qty):
         return None
     
     if current_qty < qty:
-        print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición ({current_qty})")
+        print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición ({current_qty}), ajustando")
         qty = current_qty
     
-    symbol_variations = [
-        symbol,
-        symbol.replace('USDT', '-USDT'),
-        symbol.replace('USDT', '_USDT'),
-    ]
+    # Solo usar el símbolo exacto (sin variaciones con guiones que causan errores)
+    symbol_variations = [symbol]
     
     qty_variations = [
         str(qty),
         f"{qty:.2f}",
         f"{qty:.3f}",
-        f"{qty:.4f}",
-        str(round(qty, 2)),
-        str(int(qty)),
-        str(int(qty) + 1),
+        str(int(qty)) if qty >= 1 else str(qty),
     ]
     
     for sym in symbol_variations:
@@ -265,13 +259,14 @@ def close_partial_position(symbol, side, qty):
             
             print(f"\n🔄 Probando cierre: {sym} con qty={qty_str}")
             
+            # Intento 1: Con reduceOnly
             data = {
                 'symbol': sym,
                 'qty': qty_str,
                 'side': side,
-                'tradeSide': 'DECREASE',  # ← CAMBIO: DECREASE en lugar de CLOSE
+                'tradeSide': 'CLOSE',
                 'orderType': 'MARKET',
-                'reduceOnly': 'true'  # ← CAMBIO: string 'true' en lugar de boolean True
+                'reduceOnly': True
             }
             
             result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
@@ -282,13 +277,36 @@ def close_partial_position(symbol, side, qty):
                 return result.get('data')
             else:
                 error_msg = result.get('msg', 'Unknown') if result else 'Sin respuesta'
-                print(f"   ❌ Error: {error_msg}")
+                error_code = result.get('code', 'N/A') if result else 'N/A'
+                print(f"   ❌ Error {error_code}: {error_msg}")
+                
+                # Si es error de sistema, intentar sin reduceOnly
+                if result and 'system error' in error_msg.lower():
+                    print(f"   🔄 Intentando formato alternativo (sin reduceOnly)...")
+                    data_alt = {
+                        'symbol': sym,
+                        'qty': qty_str,
+                        'side': side,
+                        'tradeSide': 'CLOSE',
+                        'orderType': 'MARKET'
+                    }
+                    
+                    result_alt = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
+                                                data=data_alt, auth=True, max_retries=1)
+                    
+                    if result_alt and result_alt.get('code') == 0:
+                        print(f"✅ ¡Cierre parcial ejecutado (sin reduceOnly) con {sym} qty={qty_str}!")
+                        return result_alt.get('data')
+                    else:
+                        error_msg_alt = result_alt.get('msg', 'Unknown') if result_alt else 'Sin respuesta'
+                        print(f"   ❌ Error alternativo: {error_msg_alt}")
                 
                 if 'not allowed to trade' in error_msg:
                     break
     
     print(f"\n❌ Ninguna combinación de cierre funcionó")
     return None
+
 def get_position_id(symbol):
     """Obtiene el ID y cantidad de la posición activa para un símbolo"""
     print(f"🔍 Buscando position ID para {symbol}...")
@@ -523,7 +541,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
                 print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
-                # PASO 1: Mover SL a BE
+                # PASO 1: Mover SL a BE (siempre, independiente del cierre)
                 print(f"   📍 Moviendo SL a BE: {entry_price}")
                 be_result = place_stop_loss(symbol, current_position_id, entry_price)
                 
