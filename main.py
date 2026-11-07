@@ -229,18 +229,18 @@ def place_order(symbol, side, qty):
     return None, None
 
 def close_partial_position(symbol, side, qty):
-    """Cierra una posición parcialmente con reduceOnly=true"""
+    """Cierra una posición parcialmente con reduceOnly='true'"""
     print(f"📤 Cerrando posición parcial: {qty} {symbol} ({side})...")
     
-    # Verificar que la posición existe y tiene suficiente cantidad
+    # Verificar que la posición existe
     current_pos_id, current_qty = get_position_id(symbol)
     if current_pos_id is None or current_qty <= 0:
         print(f"⚠️ No hay posición activa para cerrar")
         return None
     
     if current_qty < qty:
-        print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición actual ({current_qty})")
-        qty = current_qty  # Ajustar a la cantidad disponible
+        print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición ({current_qty})")
+        qty = current_qty
     
     symbol_variations = [
         symbol,
@@ -269,9 +269,9 @@ def close_partial_position(symbol, side, qty):
                 'symbol': sym,
                 'qty': qty_str,
                 'side': side,
-                'tradeSide': 'CLOSE',
+                'tradeSide': 'DECREASE',  # ← CAMBIO: DECREASE en lugar de CLOSE
                 'orderType': 'MARKET',
-                'reduceOnly': True
+                'reduceOnly': 'true'  # ← CAMBIO: string 'true' en lugar de boolean True
             }
             
             result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
@@ -289,7 +289,6 @@ def close_partial_position(symbol, side, qty):
     
     print(f"\n❌ Ninguna combinación de cierre funcionó")
     return None
-
 def get_position_id(symbol):
     """Obtiene el ID y cantidad de la posición activa para un símbolo"""
     print(f"🔍 Buscando position ID para {symbol}...")
