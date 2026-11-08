@@ -48,6 +48,7 @@ RISK_CONFIG = {
 # ═════════════════════════════════════════════════════════════════════════════
 TRADE_MANAGEMENT = {
     'be_activation_pct': 1.0,
+    'fee_buffer_pct': 0.2,         # ← NUEVO: Buffer para cubrir fees (~0.2% del notional)
     'tp1_pct': 1.0,
     'tp1_close_pct': 50.0,
     'tp2_pct': 2.0,
@@ -232,18 +233,15 @@ def close_partial_position(symbol, side, qty):
     """Cierra una posición parcialmente usando el positionId requerido por Bitunix"""
     print(f"📤 Cerrando posición parcial: {qty} {symbol} ({side})...")
     
-    # 1. Obtener el ID de la posición actual
     current_pos_id, current_qty = get_position_id(symbol)
     if current_pos_id is None or current_qty <= 0:
         print(f"⚠️ No hay posición activa para cerrar")
         return None
     
-    # 2. Ajustar cantidad si se solicita más de lo que hay
     if current_qty < qty:
         print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición ({current_qty}), ajustando")
         qty = current_qty
     
-    # 3. Usar solo el símbolo exacto (sin variaciones con guiones)
     symbol_variations = [symbol]
     
     qty_variations = [
@@ -260,15 +258,14 @@ def close_partial_position(symbol, side, qty):
             
             print(f"\n🔄 Probando cierre: {sym} con qty={qty_str}")
             
-            # 4. PAYLOAD CORREGIDO SEGÚN DOCUMENTACIÓN OFICIAL
             data = {
                 'symbol': sym,
                 'qty': qty_str,
                 'side': side,
                 'tradeSide': 'CLOSE',
                 'orderType': 'MARKET',
-                'positionId': str(current_pos_id),  # ← OBLIGATORIO PARA CLOSE
-                'reduceOnly': True                  # ← Booleano
+                'positionId': str(current_pos_id),
+                'reduceOnly': True
             }
             
             result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
@@ -452,6 +449,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     print(f"   TP1: {TRADE_MANAGEMENT['tp1_pct']}% (cerrar {TRADE_MANAGEMENT['tp1_close_pct']}%)")
     print(f"   TP2: {TRADE_MANAGEMENT['tp2_pct']}% (cerrar {TRADE_MANAGEMENT['tp2_close_pct']}% restante)")
     print(f"   Trailing: {TRADE_MANAGEMENT['trailing_distance_pct']}% después de TP2")
+    print(f"   Fee Buffer: {TRADE_MANAGEMENT['fee_buffer_pct']}% (para cubrir fees en BE)")
     
     if initial_qty <= 0:
         print(f"⚠️ Qty inicial es 0, esperando 5s...")
@@ -460,6 +458,15 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
         if initial_qty <= 0:
             print(f"❌ No se pudo obtener qty inicial. Deteniendo monitoreo.")
             return
+    
+    # Calcular el precio de BE con buffer de fees
+    fee_buffer = TRADE_MANAGEMENT['fee_buffer_pct'] / 100
+    if action == 'LONG':
+        be_price = entry_price * (1 + fee_buffer)  # BE = entry + 0.2%
+    else:
+        be_price = entry_price * (1 - fee_buffer)  # BE = entry - 0.2%
+    
+    print(f"   📍 BE calculado: {be_price} (entry {entry_price} ± {TRADE_MANAGEMENT['fee_buffer_pct']}%)")
     
     tp1_activated = False
     tp2_activated = False
@@ -522,12 +529,12 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
                 print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
-                # PASO 1: Mover SL a BE (siempre, independiente del cierre)
-                print(f"   📍 Moviendo SL a BE: {entry_price}")
-                be_result = place_stop_loss(symbol, current_position_id, entry_price)
+                # PASO 1: Mover SL a BE (con buffer de fees)
+                print(f"   📍 Moviendo SL a BE: {be_price} (entry {entry_price} + {TRADE_MANAGEMENT['fee_buffer_pct']}% fees)")
+                be_result = place_stop_loss(symbol, current_position_id, be_price)
                 
                 if be_result:
-                    print(f"   ✅ BE colocado exitosamente en {entry_price}")
+                    print(f"   ✅ BE colocado exitosamente en {be_price}")
                 else:
                     print(f"   ⚠️ No se pudo colocar BE")
                 
@@ -569,15 +576,15 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
-                    if new_sl > entry_price:
-                        print(f"📈 Trailing: new_sl={new_sl:.4f} > entry={entry_price}")
+                    if new_sl > be_price:  # Trailing no debe bajar del BE
+                        print(f"📈 Trailing: new_sl={new_sl:.4f} > be={be_price:.4f}, actualizando...")
                         sl_result = place_stop_loss(symbol, current_position_id, new_sl)
                         if sl_result:
                             print(f"   ✅ Trailing SL actualizado: {new_sl:.4f}")
                 else:
                     new_sl = lowest_price * (1 + TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
-                    if new_sl < entry_price:
-                        print(f"📉 Trailing: new_sl={new_sl:.4f} < entry={entry_price}")
+                    if new_sl < be_price:  # Trailing no debe subir del BE
+                        print(f"📉 Trailing: new_sl={new_sl:.4f} < be={be_price:.4f}, actualizando...")
                         sl_result = place_stop_loss(symbol, current_position_id, new_sl)
                         if sl_result:
                             print(f"   ✅ Trailing SL actualizado: {new_sl:.4f}")
@@ -642,7 +649,6 @@ def execute_order(action, raw_symbol, entry_price):
         symbol = convert_symbol(raw_symbol)
         print(f"✅ Símbolo: {raw_symbol} -> {symbol}")
         
-        # VERIFICAR SI YA EXISTE UNA POSICIÓN
         existing_pos_id, existing_qty = get_position_id(symbol)
         if existing_pos_id is not None and existing_qty > 0:
             print(f"⚠️ Ya existe una posición activa para {symbol} ({existing_qty} unidades)")
