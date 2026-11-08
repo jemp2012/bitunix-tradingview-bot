@@ -229,20 +229,21 @@ def place_order(symbol, side, qty):
     return None, None
 
 def close_partial_position(symbol, side, qty):
-    """Cierra una posición parcialmente con fallback inteligente"""
+    """Cierra una posición parcialmente usando el positionId requerido por Bitunix"""
     print(f"📤 Cerrando posición parcial: {qty} {symbol} ({side})...")
     
-    # Verificar que la posición existe
+    # 1. Obtener el ID de la posición actual
     current_pos_id, current_qty = get_position_id(symbol)
     if current_pos_id is None or current_qty <= 0:
         print(f"⚠️ No hay posición activa para cerrar")
         return None
     
+    # 2. Ajustar cantidad si se solicita más de lo que hay
     if current_qty < qty:
         print(f"⚠️ Cantidad solicitada ({qty}) mayor que posición ({current_qty}), ajustando")
         qty = current_qty
     
-    # Solo usar el símbolo exacto (sin variaciones con guiones que causan errores)
+    # 3. Usar solo el símbolo exacto (sin variaciones con guiones)
     symbol_variations = [symbol]
     
     qty_variations = [
@@ -259,14 +260,15 @@ def close_partial_position(symbol, side, qty):
             
             print(f"\n🔄 Probando cierre: {sym} con qty={qty_str}")
             
-            # Intento 1: Con reduceOnly
+            # 4. PAYLOAD CORREGIDO SEGÚN DOCUMENTACIÓN OFICIAL
             data = {
                 'symbol': sym,
                 'qty': qty_str,
                 'side': side,
                 'tradeSide': 'CLOSE',
                 'orderType': 'MARKET',
-                'reduceOnly': True
+                'positionId': str(current_pos_id),  # ← OBLIGATORIO PARA CLOSE
+                'reduceOnly': True                  # ← Booleano
             }
             
             result = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
@@ -279,27 +281,6 @@ def close_partial_position(symbol, side, qty):
                 error_msg = result.get('msg', 'Unknown') if result else 'Sin respuesta'
                 error_code = result.get('code', 'N/A') if result else 'N/A'
                 print(f"   ❌ Error {error_code}: {error_msg}")
-                
-                # Si es error de sistema, intentar sin reduceOnly
-                if result and 'system error' in error_msg.lower():
-                    print(f"   🔄 Intentando formato alternativo (sin reduceOnly)...")
-                    data_alt = {
-                        'symbol': sym,
-                        'qty': qty_str,
-                        'side': side,
-                        'tradeSide': 'CLOSE',
-                        'orderType': 'MARKET'
-                    }
-                    
-                    result_alt = bitunix_request('POST', '/api/v1/futures/trade/place_order', 
-                                                data=data_alt, auth=True, max_retries=1)
-                    
-                    if result_alt and result_alt.get('code') == 0:
-                        print(f"✅ ¡Cierre parcial ejecutado (sin reduceOnly) con {sym} qty={qty_str}!")
-                        return result_alt.get('data')
-                    else:
-                        error_msg_alt = result_alt.get('msg', 'Unknown') if result_alt else 'Sin respuesta'
-                        print(f"   ❌ Error alternativo: {error_msg_alt}")
                 
                 if 'not allowed to trade' in error_msg:
                     break
