@@ -21,26 +21,26 @@ LEVERAGE = 5
 BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
 RISK_CONFIG = {
-    'ZEC': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'SOL': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'AVAX': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'BCH': {'sl_atr_mult': 1.2, 'tp_rr': 1.8},
-    'AAVE': {'sl_atr_mult': 1.2, 'tp_rr': 1.8},
-    'ARB': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'LDO': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'ENS': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'ZAMA': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'HYPE': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'PUMPFUN': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'VVV': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'ATOM': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'BTW': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'STX': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'WLD': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'LIGHTER': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'INJ': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'RAY': {'sl_atr_mult': 1.5, 'tp_rr': 2.0},
-    'default': {'sl_atr_mult': 1.3, 'tp_rr': 1.8}
+    'ZEC': {'sl_offset_pct': 0.6},
+    'SOL': {'sl_offset_pct': 0.6},
+    'AVAX': {'sl_offset_pct': 0.6},
+    'BCH': {'sl_offset_pct': 0.5},
+    'AAVE': {'sl_offset_pct': 0.5},
+    'ARB': {'sl_offset_pct': 0.6},
+    'LDO': {'sl_offset_pct': 0.6},
+    'ENS': {'sl_offset_pct': 0.6},
+    'ZAMA': {'sl_offset_pct': 0.7},
+    'HYPE': {'sl_offset_pct': 0.6},
+    'PUMPFUN': {'sl_offset_pct': 0.8},
+    'VVV': {'sl_offset_pct': 0.7},
+    'ATOM': {'sl_offset_pct': 0.6},
+    'BTW': {'sl_offset_pct': 0.6},
+    'STX': {'sl_offset_pct': 0.6},
+    'WLD': {'sl_offset_pct': 0.7},
+    'LIGHTER': {'sl_offset_pct': 0.8},
+    'INJ': {'sl_offset_pct': 0.6},
+    'RAY': {'sl_offset_pct': 0.6},
+    'default': {'sl_offset_pct': 0.6}
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -48,7 +48,7 @@ RISK_CONFIG = {
 # ═════════════════════════════════════════════════════════════════════════════
 TRADE_MANAGEMENT = {
     'be_activation_pct': 1.0,
-    'fee_buffer_pct': 0.2,         # ← NUEVO: Buffer para cubrir fees (~0.2% del notional)
+    'fee_buffer_pct': 0.2,
     'tp1_pct': 1.0,
     'tp1_close_pct': 50.0,
     'tp2_pct': 2.0,
@@ -148,23 +148,6 @@ def get_klines(symbol, interval='15m', limit=20):
     if result and result.get('code') == 0:
         return result.get('data', [])
     return []
-
-def calculate_atr_from_klines(klines, period=14):
-    if len(klines) < period + 1:
-        return None
-    true_ranges = []
-    for i in range(1, len(klines)):
-        if isinstance(klines[i], dict):
-            high = float(klines[i].get('high', 0))
-            low = float(klines[i].get('low', 0))
-            prev_close = float(klines[i-1].get('close', 0))
-        else:
-            high = float(klines[i][2])
-            low = float(klines[i][3])
-            prev_close = float(klines[i-1][4])
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        true_ranges.append(tr)
-    return sum(true_ranges[-period:]) / period
 
 def set_leverage(symbol, leverage):
     result = bitunix_request('POST', '/api/v1/futures/account/change_leverage', data={
@@ -462,9 +445,9 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     # Calcular el precio de BE con buffer de fees
     fee_buffer = TRADE_MANAGEMENT['fee_buffer_pct'] / 100
     if action == 'LONG':
-        be_price = entry_price * (1 + fee_buffer)  # BE = entry + 0.2%
+        be_price = entry_price * (1 + fee_buffer)
     else:
-        be_price = entry_price * (1 - fee_buffer)  # BE = entry - 0.2%
+        be_price = entry_price * (1 - fee_buffer)
     
     print(f"   📍 BE calculado: {be_price} (entry {entry_price} ± {TRADE_MANAGEMENT['fee_buffer_pct']}%)")
     
@@ -529,7 +512,6 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
                 print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
-                # PASO 1: Mover SL a BE (con buffer de fees)
                 print(f"   📍 Moviendo SL a BE: {be_price} (entry {entry_price} + {TRADE_MANAGEMENT['fee_buffer_pct']}% fees)")
                 be_result = place_stop_loss(symbol, current_position_id, be_price)
                 
@@ -538,7 +520,6 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 else:
                     print(f"   ⚠️ No se pudo colocar BE")
                 
-                # PASO 2: Cerrar 50%
                 qty_to_close = initial_qty * (TRADE_MANAGEMENT['tp1_close_pct'] / 100)
                 qty_to_close = round(qty_to_close, get_price_precision(current_price))
                 
@@ -576,14 +557,14 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
-                    if new_sl > be_price:  # Trailing no debe bajar del BE
+                    if new_sl > be_price:
                         print(f"📈 Trailing: new_sl={new_sl:.4f} > be={be_price:.4f}, actualizando...")
                         sl_result = place_stop_loss(symbol, current_position_id, new_sl)
                         if sl_result:
                             print(f"   ✅ Trailing SL actualizado: {new_sl:.4f}")
                 else:
                     new_sl = lowest_price * (1 + TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
-                    if new_sl < be_price:  # Trailing no debe subir del BE
+                    if new_sl < be_price:
                         print(f"📉 Trailing: new_sl={new_sl:.4f} < be={be_price:.4f}, actualizando...")
                         sl_result = place_stop_loss(symbol, current_position_id, new_sl)
                         if sl_result:
@@ -616,22 +597,29 @@ def convert_symbol(symbol):
     
     return symbol_map.get(symbol, symbol)
 
-def get_risk_params(symbol, entry_price, atr):
+def get_risk_params(symbol, entry_price, action):
+    """Calcula SL basado en offset desde el entry (Opción B)"""
     risk = RISK_CONFIG.get(symbol, RISK_CONFIG['default'])
-    sl_mult, tp_rr = risk['sl_atr_mult'], risk['tp_rr']
+    offset_pct = risk['sl_offset_pct']
     
-    if atr:
-        sl_distance = atr * sl_mult
-        max_sl_distance = entry_price * 0.012
-        sl_distance = min(sl_distance, max_sl_distance)
-        
-        return {
-            'LONG': {'sl': round(entry_price - sl_distance, 4), 'tp': round(entry_price + (sl_distance * tp_rr), 4)},
-            'SHORT': {'sl': round(entry_price + sl_distance, 4), 'tp': round(entry_price - (sl_distance * tp_rr), 4)}
-        }
+    # Calcular SL como offset desde el entry
+    if action == 'LONG':
+        sl = entry_price * (1 - offset_pct / 100)  # SL abajo del entry
+    else:  # SHORT
+        sl = entry_price * (1 + offset_pct / 100)  # SL arriba del entry
+    
+    # Calcular TP basado en R:R de 2:1
+    sl_distance = abs(entry_price - sl)
+    tp_distance = sl_distance * 2.0
+    
+    if action == 'LONG':
+        tp = entry_price + tp_distance
+    else:
+        tp = entry_price - tp_distance
+    
     return {
-        'LONG': {'sl': round(entry_price * 0.988, 4), 'tp': round(entry_price * 1.024, 4)},
-        'SHORT': {'sl': round(entry_price * 1.012, 4), 'tp': round(entry_price * 0.976, 4)}
+        'sl': round(sl, 6),
+        'tp': round(tp, 6)
     }
 
 def calculate_quantity(balance, entry_price, percent, leverage):
@@ -662,12 +650,9 @@ def execute_order(action, raw_symbol, entry_price):
         
         set_leverage(symbol, LEVERAGE)
         
-        klines = get_klines(symbol, '15m', 20)
-        atr = calculate_atr_from_klines(klines, 14)
-        
-        risk_params = get_risk_params(symbol, float(entry_price), atr)
-        params = risk_params[action]
-        print(f"📊 SL inicial: {params['sl']} | TP: {params['tp']}")
+        # NUEVO: Calcular SL basado en offset (Opción B)
+        risk_params = get_risk_params(symbol, float(entry_price), action)
+        print(f"📊 SL inicial: {risk_params['sl']} ({RISK_CONFIG.get(symbol, RISK_CONFIG['default'])['sl_offset_pct']}% offset) | TP: {risk_params['tp']}")
         
         quantity = calculate_quantity(balance, float(entry_price), POSITION_SIZE_PERCENT, LEVERAGE)
         print(f"💰 Cantidad: {quantity}")
@@ -685,13 +670,13 @@ def execute_order(action, raw_symbol, entry_price):
             if position_id:
                 print(f"✅ Position ID: {position_id} | Qty: {position_qty}")
                 print(f"🛡️ Colocando SL inicial...")
-                sl_result = place_stop_loss(actual_symbol, position_id, params['sl'])
+                sl_result = place_stop_loss(actual_symbol, position_id, risk_params['sl'])
                 
                 if sl_result:
                     print(f"👁️ Iniciando monitoreo con parciales...")
                     monitor_thread = threading.Thread(
                         target=monitor_position,
-                        args=(actual_symbol, float(entry_price), action, params['sl'], position_id, position_qty),
+                        args=(actual_symbol, float(entry_price), action, risk_params['sl'], position_id, position_qty),
                         daemon=True
                     )
                     monitor_thread.start()
