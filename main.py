@@ -47,7 +47,7 @@ RISK_CONFIG = {
 # CONFIGURACIÓN DE GESTIÓN DE TRADES
 # ═════════════════════════════════════════════════════════════════════════════
 TRADE_MANAGEMENT = {
-    'be_activation_pct': 1.0,
+    'be_activation_pct': 0.6,
     'fee_buffer_pct': 0.2,
     'tp1_pct': 1.0,
     'tp1_close_pct': 50.0,
