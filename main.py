@@ -24,34 +24,37 @@ RISK_CONFIG = {
     'ZEC': {'sl_offset_pct': 0.6},
     'SOL': {'sl_offset_pct': 0.6},
     'AVAX': {'sl_offset_pct': 0.6},
-    'BCH': {'sl_offset_pct': 0.5},
-    'AAVE': {'sl_offset_pct': 0.5},
-    'ARB': {'sl_offset_pct': 0.6},
+    'BCH': {'sl_offset_pct': 0.6},
+    'AAVE': {'sl_offset_pct': 0.6},
+    'ARB': {'sl_offset_pct': 0.8},
     'LDO': {'sl_offset_pct': 0.6},
     'ENS': {'sl_offset_pct': 0.6},
-    'ZAMA': {'sl_offset_pct': 0.7},
-    'HYPE': {'sl_offset_pct': 0.6},
-    'PUMPFUN': {'sl_offset_pct': 0.8},
-    'VVV': {'sl_offset_pct': 0.7},
-    'ATOM': {'sl_offset_pct': 0.6},
-    'BTW': {'sl_offset_pct': 0.6},
-    'STX': {'sl_offset_pct': 0.6},
-    'WLD': {'sl_offset_pct': 0.7},
-    'LIGHTER': {'sl_offset_pct': 0.8},
-    'INJ': {'sl_offset_pct': 0.6},
-    'RAY': {'sl_offset_pct': 0.6},
-    'default': {'sl_offset_pct': 0.6}
+    'ZAMA': {'sl_offset_pct': 1.0},
+    'HYPE': {'sl_offset_pct': 0.7},
+    'PUMPFUN': {'sl_offset_pct': 1.2},
+    'VVV': {'sl_offset_pct': 1.0},
+    'ATOM': {'sl_offset_pct': 0.8},
+    'BTW': {'sl_offset_pct': 0.8},
+    'STX': {'sl_offset_pct': 0.7},
+    'WLD': {'sl_offset_pct': 1.0},
+    'LIGHTER': {'sl_offset_pct': 1.0},
+    'INJ': {'sl_offset_pct': 0.7},
+    'RAY': {'sl_offset_pct': 0.8},
+    'PENGU': {'sl_offset_pct': 1.0},
+    'ATH': {'sl_offset_pct': 1.0},
+    'ALGO': {'sl_offset_pct': 0.8},
+    'default': {'sl_offset_pct': 0.8}
 }
 
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURACIÓN DE GESTIÓN DE TRADES
 # ═════════════════════════════════════════════════════════════════════════════
 TRADE_MANAGEMENT = {
-    'be_activation_pct': 0.6,
-    'fee_buffer_pct': 0.2,
-    'tp1_pct': 1.0,
+    'be_activation_pct': 0.4,          # ← BE se activa al 0.4%
+    'fee_buffer_pct': 0.2,             # Buffer para cubrir fees
+    'tp1_pct': 1.0,                    # TP1 al 1.0%
     'tp1_close_pct': 50.0,
-    'tp2_pct': 2.0,
+    'tp2_pct': 2.0,                    # TP2 al 2.0%
     'tp2_close_pct': 50.0,
     'trailing_activation_pct': 2.0,
     'trailing_distance_pct': 1.0,
@@ -429,6 +432,7 @@ def get_current_price(symbol):
 def monitor_position(symbol, entry_price, action, initial_sl, position_id, initial_qty):
     print(f"\n👁️ Monitoreo iniciado: {symbol} {action}")
     print(f"   Entry: {entry_price} | SL inicial: {initial_sl} | Qty inicial: {initial_qty}")
+    print(f"   BE: {TRADE_MANAGEMENT['be_activation_pct']}% (mover SL a entry + fees)")
     print(f"   TP1: {TRADE_MANAGEMENT['tp1_pct']}% (cerrar {TRADE_MANAGEMENT['tp1_close_pct']}%)")
     print(f"   TP2: {TRADE_MANAGEMENT['tp2_pct']}% (cerrar {TRADE_MANAGEMENT['tp2_close_pct']}% restante)")
     print(f"   Trailing: {TRADE_MANAGEMENT['trailing_distance_pct']}% después de TP2")
@@ -449,9 +453,10 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     else:
         be_price = entry_price * (1 - fee_buffer)
     
-    print(f"   📍 BE calculado: {be_price} (entry {entry_price} ± {TRADE_MANAGEMENT['fee_buffer_pct']}%)")
+    print(f"   📍 BE price: {be_price} (entry {entry_price} ± {TRADE_MANAGEMENT['fee_buffer_pct']}%)")
     
-    tp1_activated = False
+    be_activated = False       # ← NUEVO: Flag independiente para BE
+    tp1_activated = False      # ← RENOMBRADO: Ahora solo para TP1
     tp2_activated = False
     trailing_activated = False
     highest_price = entry_price
@@ -508,9 +513,11 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if check_count % 3 == 0:
                 print(f"📊 [{check_count}] Precio: {current_price} | PnL: {pnl_pct:.2f}% | Qty: {current_qty} | Highest: {highest_price} | Lowest: {lowest_price}")
             
-            # TP1: BE + Cerrar 50% al 1%
-            if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and not tp1_activated:
-                print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
+            # ═══════════════════════════════════════════════════════════════
+            # BE: Activar al 0.4% (INDEPENDIENTE del TP1)
+            # ═══════════════════════════════════════════════════════════════
+            if pnl_pct >= TRADE_MANAGEMENT['be_activation_pct'] and not be_activated:
+                print(f"\n🛡️ ¡BE ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['be_activation_pct']}%")
                 
                 print(f"   📍 Moviendo SL a BE: {be_price} (entry {entry_price} + {TRADE_MANAGEMENT['fee_buffer_pct']}% fees)")
                 be_result = place_stop_loss(symbol, current_position_id, be_price)
@@ -518,7 +525,15 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 if be_result:
                     print(f"   ✅ BE colocado exitosamente en {be_price}")
                 else:
-                    print(f"   ⚠️ No se pudo colocar BE")
+                    print(f"   ⚠️ No se pudo colocar BE, reintentando en próximo ciclo...")
+                
+                be_activated = True
+            
+            # ═══════════════════════════════════════════════════════════════
+            # TP1: Cerrar 50% al 1.0%
+            # ═══════════════════════════════════════════════════════════════
+            if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and be_activated and not tp1_activated:
+                print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
                 qty_to_close = initial_qty * (TRADE_MANAGEMENT['tp1_close_pct'] / 100)
                 qty_to_close = round(qty_to_close, get_price_precision(current_price))
@@ -534,7 +549,9 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 
                 tp1_activated = True
             
-            # TP2: Cerrar 50% del remanente + Activar Trailing al 2%
+            # ═══════════════════════════════════════════════════════════════
+            # TP2: Cerrar 50% del remanente + Activar Trailing al 2.0%
+            # ═══════════════════════════════════════════════════════════════
             if pnl_pct >= TRADE_MANAGEMENT['tp2_pct'] and tp1_activated and not tp2_activated:
                 print(f"\n🎯 ¡TP2 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp2_pct']}%")
                 
@@ -553,7 +570,9 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 else:
                     print(f"   ❌ No se pudo ejecutar TP2")
             
+            # ═══════════════════════════════════════════════════════════════
             # Trailing Stop después de TP2
+            # ═══════════════════════════════════════════════════════════════
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
@@ -602,13 +621,11 @@ def get_risk_params(symbol, entry_price, action):
     risk = RISK_CONFIG.get(symbol, RISK_CONFIG['default'])
     offset_pct = risk['sl_offset_pct']
     
-    # Calcular SL como offset desde el entry
     if action == 'LONG':
-        sl = entry_price * (1 - offset_pct / 100)  # SL abajo del entry
-    else:  # SHORT
-        sl = entry_price * (1 + offset_pct / 100)  # SL arriba del entry
+        sl = entry_price * (1 - offset_pct / 100)
+    else:
+        sl = entry_price * (1 + offset_pct / 100)
     
-    # Calcular TP basado en R:R de 2:1
     sl_distance = abs(entry_price - sl)
     tp_distance = sl_distance * 2.0
     
@@ -650,7 +667,6 @@ def execute_order(action, raw_symbol, entry_price):
         
         set_leverage(symbol, LEVERAGE)
         
-        # NUEVO: Calcular SL basado en offset (Opción B)
         risk_params = get_risk_params(symbol, float(entry_price), action)
         print(f"📊 SL inicial: {risk_params['sl']} ({RISK_CONFIG.get(symbol, RISK_CONFIG['default'])['sl_offset_pct']}% offset) | TP: {risk_params['tp']}")
         
