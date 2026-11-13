@@ -647,7 +647,24 @@ def calculate_quantity(balance, entry_price, percent, leverage):
 
 def execute_order(action, raw_symbol, entry_price):
     try:
+        
+        # ═══════════════════════════════════════════════════════════════
+        # PAUSA HORARIA: Evitar operar de 06:00 a 11:59 (UTC-5)
+        # ═══════════════════════════════════════════════════════════════
+        from datetime import datetime, timezone, timedelta
+        
+        utc_minus_5 = timezone(timedelta(hours=-5))
+        hora_local = datetime.now(utc_minus_5).hour
+        
+        if 6 <= hora_local < 12:
+            print(f"⏸️ Bot en PAUSA: Son las {hora_local}:00 (UTC-5). Horario de alta volatilidad negativa.")
+            return
+        
         print(f"\n{'='*60}")
+        print(f"🚀 Ejecución: {action} {raw_symbol} @ {entry_price}")
+        print(f"{'='*60}\n")
+        
+        # ... resto del código igual ...print(f"\n{'='*60}")
         print(f"🚀 Ejecución: {action} {raw_symbol} @ {entry_price}")
         print(f"{'='*60}\n")
         
