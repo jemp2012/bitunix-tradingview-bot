@@ -50,11 +50,11 @@ RISK_CONFIG = {
 # CONFIGURACIÓN DE GESTIÓN DE TRADES
 # ═════════════════════════════════════════════════════════════════════════════
 TRADE_MANAGEMENT = {
-    'be_activation_pct': 0.4,          # ← BE se activa al 0.4%
-    'fee_buffer_pct': 0.2,             # Buffer para cubrir fees
-    'tp1_pct': 1.0,                    # TP1 al 1.0%
+    'be_activation_pct': 0.4,
+    'fee_buffer_pct': 0.2,
+    'tp1_pct': 1.0,
     'tp1_close_pct': 50.0,
-    'tp2_pct': 2.0,                    # TP2 al 2.0%
+    'tp2_pct': 2.0,
     'tp2_close_pct': 50.0,
     'trailing_activation_pct': 2.0,
     'trailing_distance_pct': 1.0,
@@ -455,8 +455,8 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
     
     print(f"   📍 BE price: {be_price} (entry {entry_price} ± {TRADE_MANAGEMENT['fee_buffer_pct']}%)")
     
-    be_activated = False       # ← NUEVO: Flag independiente para BE
-    tp1_activated = False      # ← RENOMBRADO: Ahora solo para TP1
+    be_activated = False
+    tp1_activated = False
     tp2_activated = False
     trailing_activated = False
     highest_price = entry_price
@@ -513,9 +513,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
             if check_count % 3 == 0:
                 print(f"📊 [{check_count}] Precio: {current_price} | PnL: {pnl_pct:.2f}% | Qty: {current_qty} | Highest: {highest_price} | Lowest: {lowest_price}")
             
-            # ═══════════════════════════════════════════════════════════════
             # BE: Activar al 0.4% (INDEPENDIENTE del TP1)
-            # ═══════════════════════════════════════════════════════════════
             if pnl_pct >= TRADE_MANAGEMENT['be_activation_pct'] and not be_activated:
                 print(f"\n🛡️ ¡BE ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['be_activation_pct']}%")
                 
@@ -529,9 +527,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 
                 be_activated = True
             
-            # ═══════════════════════════════════════════════════════════════
             # TP1: Cerrar 50% al 1.0%
-            # ═══════════════════════════════════════════════════════════════
             if pnl_pct >= TRADE_MANAGEMENT['tp1_pct'] and be_activated and not tp1_activated:
                 print(f"\n🎯 ¡TP1 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp1_pct']}%")
                 
@@ -549,9 +545,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 
                 tp1_activated = True
             
-            # ═══════════════════════════════════════════════════════════════
             # TP2: Cerrar 50% del remanente + Activar Trailing al 2.0%
-            # ═══════════════════════════════════════════════════════════════
             if pnl_pct >= TRADE_MANAGEMENT['tp2_pct'] and tp1_activated and not tp2_activated:
                 print(f"\n🎯 ¡TP2 ACTIVADO! PnL: {pnl_pct:.2f}% >= {TRADE_MANAGEMENT['tp2_pct']}%")
                 
@@ -570,9 +564,7 @@ def monitor_position(symbol, entry_price, action, initial_sl, position_id, initi
                 else:
                     print(f"   ❌ No se pudo ejecutar TP2")
             
-            # ═══════════════════════════════════════════════════════════════
             # Trailing Stop después de TP2
-            # ═══════════════════════════════════════════════════════════════
             if trailing_activated:
                 if action == 'LONG':
                     new_sl = highest_price * (1 - TRADE_MANAGEMENT['trailing_distance_pct'] / 100)
@@ -647,24 +639,7 @@ def calculate_quantity(balance, entry_price, percent, leverage):
 
 def execute_order(action, raw_symbol, entry_price):
     try:
-        
-        # ═══════════════════════════════════════════════════════════════
-        # PAUSA HORARIA: Evitar operar de 06:00 a 11:59 (UTC-5)
-        # ═══════════════════════════════════════════════════════════════
-        from datetime import datetime, timezone, timedelta
-        
-        utc_minus_5 = timezone(timedelta(hours=-5))
-        hora_local = datetime.now(utc_minus_5).hour
-        
-        if 6 <= hora_local < 12:
-            print(f"⏸️ Bot en PAUSA: Son las {hora_local}:00 (UTC-5). Horario de alta volatilidad negativa.")
-            return
-        
         print(f"\n{'='*60}")
-        print(f"🚀 Ejecución: {action} {raw_symbol} @ {entry_price}")
-        print(f"{'='*60}\n")
-        
-        # ... resto del código igual ...print(f"\n{'='*60}")
         print(f"🚀 Ejecución: {action} {raw_symbol} @ {entry_price}")
         print(f"{'='*60}\n")
         
