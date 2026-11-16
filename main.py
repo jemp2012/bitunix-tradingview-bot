@@ -683,6 +683,15 @@ def process_order(action, symbol, price, swing_price=None):
     if not BITUNIX_API_KEY:
         print("❌ Faltan API Keys")
         return
+    
+    # Convertir swing_price a float si viene como string
+    if swing_price is not None:
+        try:
+            swing_price = float(swing_price)
+        except (ValueError, TypeError):
+            print(f"⚠️ swing_price inválido: {swing_price}, usando método offset")
+            swing_price = None
+    
     execute_order(action, symbol, float(price), swing_price)
 
 # ════════════════════════════════════════════════════════════════════════════
