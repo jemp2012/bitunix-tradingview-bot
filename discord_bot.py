@@ -209,8 +209,38 @@ async def on_message(message):
         else:
             print("⚠️ No se pudo parsear la señal. Formato no reconocido.")
 
+# ════════════════════════════════════════════════════════════════════════════
+# SERVIDOR HTTP MÍNIMO PARA RENDER
+# ════════════════════════════════════════════════════════════════════════════
+from flask import Flask, jsonify
+
+health_app = Flask(__name__)
+
+@health_app.route('/', methods=['GET'])
+def health_index():
+    return 'Discord Bot Running!'
+
+@health_app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok', 'bot': 'discord'}), 200
+
+def run_health_server():
+    """Ejecuta el servidor HTTP en un hilo separado"""
+    port = int(os.environ.get('PORT', 10000))
+    health_app.run(host='0.0.0.0', port=port, debug=False)
+
+# ════════════════════════════════════════════════════════════════════════════
+# INICIO
+# ════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
     if not DISCORD_TOKEN or not BITUNIX_API_KEY:
         print("❌ Faltan variables de entorno (DISCORD_TOKEN, BITUNIX_API_KEY)")
         exit(1)
+    
+    # Iniciar servidor HTTP en hilo separado (para que Render detecte el puerto)
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    print(f"🌐 Servidor HTTP iniciado en puerto {os.environ.get('PORT', 10000)}")
+    
+    # Ejecutar el bot de Discord (bloquea el hilo principal)
     client.run(DISCORD_TOKEN)
