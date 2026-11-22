@@ -199,7 +199,7 @@ async def on_message(message):
     if message.author == client.user or message.channel.id != DISCORD_CHANNEL_ID:
         return
     
-          if message.content.startswith('!'):
+    if message.content.startswith('!'):
         print(f"\n📨 Nueva señal detectada de {message.author.name}")
         signal = parse_signal(message.content)
         
