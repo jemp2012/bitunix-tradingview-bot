@@ -7,7 +7,6 @@ import requests
 import secrets
 import json
 import threading
-from discord.ext import tasks
 
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURACIÓN
@@ -19,11 +18,10 @@ BITUNIX_API_KEY = os.environ.get('BITUNIX_API_KEY', '')
 BITUNIX_SECRET_KEY = os.environ.get('BITUNIX_SECRET_KEY', '')
 BITUNIX_BASE_URL = 'https://fapi.bitunix.com'
 
-# Gestión de riesgo
 POSITION_SIZE_PERCENT = 1.0
 DEFAULT_LEVERAGE = 5
 
-print(f"🔧 Configuración cargada:")
+print(f"🔧 Configuración:")
 print(f"   Channel ID: {DISCORD_CHANNEL_ID}")
 print(f"   Token length: {len(DISCORD_TOKEN)}")
 print(f"   API Key length: {len(BITUNIX_API_KEY)}")
@@ -70,7 +68,7 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
                     return result
             time.sleep(2)
         except Exception as e:
-            print(f"⚠️ Error en request: {e}")
+            print(f"⚠️ Error: {e}")
             time.sleep(2)
     return None
 
@@ -126,7 +124,7 @@ def calculate_quantity(balance, entry_price, percent, leverage):
     return round(buying_power / entry_price, 4)
 
 # ════════════════════════════════════════════════════════════════════════════
-# PARSER DE SEÑALES
+# PARSER
 # ════════════════════════════════════════════════════════════════════════════
 def parse_signal(message_content):
     try:
@@ -135,7 +133,6 @@ def parse_signal(message_content):
         
         match = re.search(r'[!#]\s*([A-Za-z0-9]+)/([A-Za-z0-9]+)\s*[-–]\s*(Long|Short)', title, re.IGNORECASE)
         if not match:
-            print(f"⚠️ No se encontró patrón en: {title}")
             return None
         
         symbol = f"{match.group(1)}{match.group(2)}"
@@ -160,7 +157,6 @@ def parse_signal(message_content):
         
         if data['entry'] and data['sl']:
             return data
-        print(f"⚠️ Datos incompletos: {data}")
         return None
     except Exception as e:
         print(f"❌ Error parseando: {e}")
@@ -174,7 +170,7 @@ def execute_signal(signal):
     
     balance = get_balance()
     if balance <= 10:
-        print("❌ Balance insuficiente (< 10 USDT)")
+        print("❌ Balance insuficiente")
         return
     
     set_leverage(signal['symbol'], signal['leverage'])
@@ -189,16 +185,11 @@ def execute_signal(signal):
         if pos_id:
             place_stop_loss(signal['symbol'], pos_id, signal['sl'])
             print("✅ Señal ejecutada y protegida con SL")
-        else:
-            print("⚠️ Orden ejecutada, pero no se encontró la posición para colocar el SL")
 
 # ════════════════════════════════════════════════════════════════════════════
-# BOT DE DISCORD CON RECONEXIÓN AUTOMÁTICA
+# BOT DE DISCORD
 # ════════════════════════════════════════════════════════════════════════════
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.guild_messages = True
+intents = discord.Intents.all()
 
 client = discord.Client(intents=intents)
 
@@ -206,39 +197,35 @@ client = discord.Client(intents=intents)
 async def on_ready():
     print(f"✅ Bot conectado como {client.user}")
     print(f"📡 Escuchando canal ID: {DISCORD_CHANNEL_ID}")
-    print(f"🔍 Guilds disponibles: {[guild.name for guild in client.guilds]}")
 
 @client.event
 async def on_disconnect():
-    print("⚠️ Bot desconectado de Discord")
+    print("⚠️ Desconectado")
 
 @client.event
 async def on_resumed():
-    print("✅ Bot reconectado a Discord")
+    print("✅ Reconectado")
 
 @client.event
 async def on_message(message):
-    print(f"📨 Mensaje recibido de {message.author.name} en canal {message.channel.id}: {message.content[:50]}")
+    print(f"📨 Mensaje: {message.author.name} | Canal: {message.channel.id} | Contenido: {message.content[:50]}")
     
     if message.author == client.user:
         return
     
     if message.channel.id != DISCORD_CHANNEL_ID:
-        print(f"⚠️ Canal incorrecto. Esperado: {DISCORD_CHANNEL_ID}, Recibido: {message.channel.id}")
         return
     
     if message.content.startswith('!'):
-        print(f"\n📨 Nueva señal detectada de {message.author.name}")
+        print(f"📨 Señal detectada de {message.author.name}")
         signal = parse_signal(message.content)
         
         if signal:
-            await message.channel.send(f"🤖 Señal recibida y procesando: {signal['direction']} {signal['symbol']}")
+            await message.channel.send(f"🤖 Procesando: {signal['direction']} {signal['symbol']}")
             execute_signal(signal)
-        else:
-            print("⚠️ No se pudo parsear la señal. Formato no reconocido.")
 
 # ════════════════════════════════════════════════════════════════════════════
-# SERVIDOR HTTP PARA RENDER
+# SERVIDOR HTTP
 # ════════════════════════════════════════════════════════════════════════════
 from flask import Flask, jsonify
 
@@ -246,34 +233,21 @@ health_app = Flask(__name__)
 
 @health_app.route('/', methods=['GET'])
 def health_index():
-    return 'Discord Bot Running!'
-
-@health_app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'ok', 'bot': 'discord'}), 200
+    return 'OK'
 
 def run_health_server():
     port = int(os.environ.get('PORT', 10000))
     health_app.run(host='0.0.0.0', port=port, debug=False)
 
 # ════════════════════════════════════════════════════════════════════════════
-# INICIO CON REINTENTOS AUTOMÁTICOS
+# INICIO
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    if not DISCORD_TOKEN or not BITUNIX_API_KEY:
-        print("❌ Faltan variables de entorno")
+    if not DISCORD_TOKEN:
+        print("❌ Falta DISCORD_TOKEN")
         exit(1)
     
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
-    print(f"🌐 Servidor HTTP iniciado en puerto {os.environ.get('PORT', 10000)}")
     
-    # Reconexión automática
-    while True:
-        try:
-            print("🔗 Conectando a Discord...")
-            client.run(DISCORD_TOKEN, reconnect=True)
-        except Exception as e:
-            print(f"❌ Error de conexión: {e}")
-            print("🔄 Reintentando en 5 segundos...")
-            time.sleep(5)
+    client.run(DISCORD_TOKEN)
