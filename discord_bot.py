@@ -260,4 +260,11 @@ if __name__ == '__main__':
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     
-    client.run(DISCORD_TOKEN)
+    print("🔗 Iniciando bot con reconexión automática...")
+    while True:
+        try:
+            client.run(DISCORD_TOKEN, reconnect=True)
+        except Exception as e:
+            print(f"❌ Bot desconectado: {e}")
+            print("🔄 Reconectando en 5 segundos...")
+            time.sleep(5)
