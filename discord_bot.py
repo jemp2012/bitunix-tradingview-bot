@@ -112,12 +112,19 @@ def set_leverage(symbol, leverage):
     return result and result.get('code') == 0
 
 def place_order(symbol, side, qty):
-    data = {'symbol': symbol, 'qty': str(qty), 'side': side, 'tradeSide': 'OPEN', 'orderType': 'MARKET'}
+    data = {
+        'symbol': symbol,
+        'qty': str(qty),
+        'side': side,
+        'tradeSide': 'OPEN',
+        'orderType': 'MARKET',
+        'marginCoin': 'USDT'  # ← PARÁMETRO FALTANTE
+    }
     result = bitunix_request('POST', '/api/v1/futures/trade/place_order', data=data, auth=True)
     if result and result.get('code') == 0:
-        print(f"✅ Orden ejecutada: {symbol} {side} {qty}")
+        print(f"✅ Orden ejecutada: {symbol} {side} {qty}", flush=True)
         return result.get('data')
-    print(f"❌ Error orden: {result.get('msg') if result else 'Sin respuesta'}")
+    print(f"❌ Error orden: {result.get('msg') if result else 'Sin respuesta'}", flush=True)
     return None
 
 def place_stop_loss(symbol, position_id, sl_price):
