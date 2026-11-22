@@ -221,8 +221,18 @@ async def on_message(message):
         signal = parse_signal(message.content)
         
         if signal:
-            await message.channel.send(f"🤖 Procesando: {signal['direction']} {signal['symbol']}")
-            execute_signal(signal)
+            try:
+                await message.channel.send(f"🤖 Procesando: {signal['direction']} {signal['symbol']}")
+                print(f"🚀 Iniciando ejecución de señal...")
+                execute_signal(signal)
+                print(f"✅ Ejecución completada")
+            except Exception as e:
+                print(f"❌ ERROR EN EJECUCIÓN: {e}")
+                import traceback
+                traceback.print_exc()
+                await message.channel.send(f"⚠️ Error al procesar la señal: {str(e)[:100]}")
+        else:
+            print("⚠️ No se pudo parsear la señal")
 
 # ════════════════════════════════════════════════════════════════════════════
 # SERVIDOR HTTP
