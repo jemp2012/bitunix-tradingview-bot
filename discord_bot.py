@@ -39,8 +39,12 @@ def generate_signature(secret_key, timestamp, nonce, api_key, query_string='', b
 
 def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_retries=3):
     url = f"{BITUNIX_BASE_URL}{endpoint}"
+    print(f"🔌 Llamando API: {method} {url}", flush=True)
+    
     for attempt in range(max_retries):
         try:
+            print(f"🔄 Intento {attempt + 1}/{max_retries}", flush=True)
+            
             timestamp = time.strftime('%Y%m%d%H%M%S', time.gmtime())
             nonce = secrets.token_hex(8)
             headers = {'Content-Type': 'application/json', 'language': 'en-US'}
@@ -56,20 +60,35 @@ def bitunix_request(method, endpoint, params=None, data=None, auth=False, max_re
                 if data:
                     body_str = json.dumps(data, separators=(',', ':'), sort_keys=True)
                 headers['sign'] = generate_signature(BITUNIX_SECRET_KEY, timestamp, nonce, BITUNIX_API_KEY, query_string, body_str)
+                print(f"🔑 Headers: api-key={BITUNIX_API_KEY[:8]}..., timestamp={timestamp}", flush=True)
             
             if method == 'GET':
+                print(f"📤 GET request...", flush=True)
                 response = requests.get(url, params=params, headers=headers, timeout=10)
             else:
+                print(f"📤 POST request con body: {body_str[:100]}", flush=True)
                 response = requests.post(url, data=body_str, headers=headers, timeout=10)
+            
+            print(f"📥 Response status: {response.status_code}", flush=True)
+            print(f"📥 Response body: {response.text[:200]}", flush=True)
             
             if response.status_code == 200:
                 result = response.json()
+                print(f"📊 Result code: {result.get('code')}", flush=True)
                 if result.get('code') == 0:
+                    print(f"✅ API call exitosa", flush=True)
                     return result
+                else:
+                    print(f"⚠️ API returned error: {result.get('msg')}", flush=True)
+            else:
+                print(f"❌ HTTP error: {response.status_code}", flush=True)
+            
             time.sleep(2)
         except Exception as e:
-            print(f"⚠️ Error: {e}")
+            print(f"⚠️ Exception en intento {attempt + 1}: {e}", flush=True)
             time.sleep(2)
+    
+    print(f"❌ Todos los intentos fallaron", flush=True)
     return None
 
 # ════════════════════════════════════════════════════════════════════════════
