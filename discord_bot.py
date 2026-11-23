@@ -7,6 +7,7 @@ import hashlib
 import requests
 import secrets
 import json
+import threading
 
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURACIÓN
