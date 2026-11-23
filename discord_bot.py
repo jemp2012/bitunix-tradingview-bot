@@ -149,24 +149,28 @@ def cancel_tpsl_order(symbol, order_id):
     result = bitunix_request('POST', '/api/v1/futures/tpsl/cancel_order', data={'symbol': symbol, 'orderId': str(order_id)}, auth=True)
     return result and result.get('code') == 0
 
-def place_stop_loss(symbol, position_id, sl_price):
+def place_stop_loss(symbol, position_id, sl_price, max_attempts=5):
     print(f"🛡️ Colocando SL en {sl_price} para {symbol}...", flush=True)
     precision = get_price_precision(sl_price)
     sl_price_rounded = round(sl_price, precision)
-    
+
     existing_order = get_pending_tpsl_orders(symbol, position_id)
     if existing_order and existing_order.get('orderId'):
         cancel_tpsl_order(symbol, existing_order.get('orderId'))
         time.sleep(1)
-    
+
     data = {'symbol': symbol, 'positionId': str(position_id), 'slPrice': str(sl_price_rounded)}
-    result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True)
-    
-    if result and result.get('code') == 0:
-        print(f"✅ Stop Loss colocado: {sl_price_rounded}", flush=True)
-        return result.get('data')
-    print(f"⚠️ Error colocando SL: {result}", flush=True)
-    return None
+
+    for attempt in range(max_attempts):
+        result = bitunix_request('POST', '/api/v1/futures/tpsl/position/place_order', data=data, auth=True, max_retries=1)
+        if result and result.get('code') == 0:
+            print(f"✅ Stop Loss colocado: {sl_price_rounded} (intento {attempt+1})", flush=True)
+            return True
+        print(f"   ⚠️ Intento {attempt+1}/{max_attempts} falló: {result.get('msg') if result else 'None'}", flush=True)
+        time.sleep(3)  # Espera extra por si la posición aún no estaba lista en Bitunix
+
+    print(f"❌ SL NO colocado tras {max_attempts} intentos", flush=True)
+    return False
 
 def calculate_quantity(balance, entry_price, percent, leverage):
     usdt_to_use = balance * (percent / 100)
@@ -215,36 +219,61 @@ def parse_signal(message_content):
 def execute_signal(signal):
     print(f"\n{'='*60}", flush=True)
     print(f"🚀 Ejecución: {signal['direction']} {signal['symbol']} @ {signal['entry']}", flush=True)
-    print(f"🛡️ SL: {signal['sl']} | ⚡ Leverage: {signal['leverage']}x", flush=True)
+    print(f"🛡️ SL: {signal['sl']} | ⚡ Leverage: {signal['leverage']}x | 🎯 TPs: {signal.get('tps', [])}", flush=True)
     print(f"{'='*60}\n", flush=True)
-    
+
+    existing_id, existing_qty = get_position_id(signal['symbol'])
+    if existing_id and existing_qty > 0:
+        print(f"⚠️ Ya existe posición activa para {signal['symbol']}. Ignorando señal.", flush=True)
+        return
+
     balance = get_balance()
     if balance <= 10:
         print("❌ Balance insuficiente (< 10 USDT)", flush=True)
         return
-    
+
     set_leverage(signal['symbol'], signal['leverage'])
     qty = calculate_quantity(balance, signal['entry'], POSITION_SIZE_PERCENT, signal['leverage'])
     print(f"💰 Cantidad calculada: {qty}", flush=True)
-    
+
     side = 'BUY' if signal['direction'] == 'LONG' else 'SELL'
     order_result, used_symbol = place_order(signal['symbol'], side, qty)
-    
-    if order_result:
-        print("⏳ Esperando 2s para confirmar posición...", flush=True)
-        time.sleep(2)
-        
-        actual_symbol = used_symbol or signal['symbol']
-        position_id, position_qty = get_position_id(actual_symbol)
-        
-        if position_id:
-            print(f"✅ Position ID: {position_id} | Qty: {position_qty}", flush=True)
-            place_stop_loss(actual_symbol, position_id, signal['sl'])
-            print("✅ SEÑAL EJECUTADA Y PROTEGIDA CON SL", flush=True)
-        else:
-            print("⚠️ Orden ejecutada, pero no se encontró la posición para colocar el SL", flush=True)
-    else:
+
+    if not order_result:
         print("❌ Orden NO ejecutada", flush=True)
+        return
+
+    print("⏳ Esperando 2s para confirmar posición...", flush=True)
+    time.sleep(2)
+
+    actual_symbol = used_symbol or signal['symbol']
+    position_id, position_qty = get_position_id(actual_symbol)
+
+    if not position_id:
+        print("⚠️ Orden ejecutada pero NO se encontró la posición.", flush=True)
+        return
+
+    print(f"✅ Position ID: {position_id} | Qty: {position_qty}", flush=True)
+
+    # 👉 Verificamos el resultado REAL del SL
+    sl_ok = place_stop_loss(actual_symbol, position_id, signal['sl'])
+
+    if sl_ok:
+        print("✅ SEÑAL EJECUTADA Y PROTEGIDA CON SL", flush=True)
+        
+        # Lanzar monitor de TPs solo si hay objetivos
+        if signal.get('tps'):
+            monitor_thread = threading.Thread(
+                target=monitor_position,
+                args=(actual_symbol, signal['direction'], signal['entry'], signal['tps'], position_id),
+                daemon=True
+            )
+            monitor_thread.start()
+            print(f"👁️ Monitor de TPs iniciado para {actual_symbol}", flush=True)
+        else:
+            print("ℹ️ La señal no tiene TPs. Solo SL inicial (sin trailing).", flush=True)
+    else:
+        print("🚨 PELIGRO: Posición abierta SIN Stop Loss. Colócalo manualmente en Bitunix.", flush=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 # BOT DE DISCORD
